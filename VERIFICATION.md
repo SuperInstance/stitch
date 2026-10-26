@@ -15,15 +15,16 @@ the documented invocation; the package is not installed site-wide.
 | Oracle Cloud | aarch64, OCI Ampere A1, kernel 7.0.0-1013-oracle | 3.14.4 | **39/39 pass** | pass | pass |
 | Orin | Jetson Orin Nano Super, aarch64, kernel 6.8.12-1021-tegra | 3.12.3 | **39/39 pass** | pass | pass |
 | Thor | Jetson AGX Thor, aarch64, kernel 6.8.12-1021-tegra | 3.12.3 | **39/39 pass** | pass | pass |
-| ProArt | x86_64 WSL2, RTX 4050 | — | **NOT RUN** | NOT RUN | NOT RUN |
+| ProArt | x86_64 WSL2 (eileen), RTX 4050 | 3.14.4 | **39/39 pass** | pass | pass |
 
 Notes:
 
-- **ProArt was not run.** Its reverse tunnel (Oracle loopback port 2222) was
-  down for the whole session after a reboot — WSL had not brought the tunnel
-  service back. The other tunnel slots (2224 Orin, 2225 Thor) were verified
-  listening. The smoke is a ~20-second rerun whenever the tunnel returns;
-  nothing about the ProArt result is claimed here.
+- **ProArt was run later the same day.** During the first session its reverse
+  tunnel (Oracle loopback port 2222) was down after a reboot — WSL had not
+  brought the tunnel service back. Once Casey restarted WSL and the tunnel
+  returned, the full suite ran there too: 39/39 pass, cross-language harness
+  pass, demo pass (Python 3.14.4, pytest 9.1.1, x86_64 WSL2 on eileen).
+  Scratch was removed from the box afterwards.
 - **Thor was load-gated, per Casey's instruction.** Observed before running:
   load average 6.38 / 6.62 / 7.42 on 14 cores (~45%), 78 GiB RAM available,
   the resident workload being a Blender render from another agent's lane.
