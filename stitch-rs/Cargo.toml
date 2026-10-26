@@ -1,0 +1,28 @@
+[package]
+name = "stitch"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A tiny, language-portable substrate primitive for accountable agent state."
+authors = ["SuperInstance"]
+repository = "https://github.com/SuperInstance/stitch"
+keywords = ["substrate", "agent", "conservation-law", "ledger", "surprise"]
+categories = ["data-structures", "cryptography::cryptocurrencies"]
+
+[lib]
+name = "stitch"
+path = "src/lib.rs"
+
+[dependencies]
+# The library itself uses serde_json (wire format) and sha2 (cell IDs).
+# These are real dependencies — an earlier draft of this manifest listed
+# them as dev-dependencies only, which did not compile.
+serde_json = "1.0"
+sha2 = "0.10"
+
+[dev-dependencies]
+
+[features]
+default = []
+# Enable real Ed25519 signatures (v0.2)
+ed25519 = []
