@@ -1,4 +1,4 @@
-# stitch — Canonical Specification v0.1
+# stitch — Canonical Specification v0.2
 
 This document is the canonical specification for the `stitch` substrate primitive. Any implementation in any language must produce byte-exact ledger output matching this spec to be conformant.
 
@@ -144,7 +144,7 @@ The library's `Surprise` class is the seam — implementations should be swappab
 
 ## Tenant identity
 
-In v0.1, tenant identity is a string (any UTF-8). In v0.2, it will be an Ed25519 public key (32 bytes, hex-encoded). The `ATTEST` stitch's `sig` field will be a real Ed25519 signature in v0.2; in v0.1 it is a SHA-256 hash placeholder.
+Tenant identity is a string (any UTF-8). An earlier roadmap draft planned Ed25519 public-key identities and real `ATTEST` signatures for v0.2; that is deferred. Ed25519 is not in the Python standard library, and stitch's zero-dependency rule outranks it — a hand-rolled signature implementation would be worse than an honest deferral. Consequence, stated plainly: in v0.2 an identity is a *claim*, not a proof. The agreement rules in the next section prove that two records agree; they do not prove who wrote a record. The `ATTEST` stitch's `sig` field remains a SHA-256 hash placeholder.
 
 ---
 
@@ -180,9 +180,75 @@ The determinism rules:
 
 Conformance never depends on synchrony. The `t` field is the writer's local observation; verifiers MUST NOT compare `t` values across ledgers or require them to be monotonic across writers. The hash chain is the only ordering a conformant implementation needs, and it is internal to one ledger. A ledger can be verified at any time after it was written — verification and cross-ledger agreement are asynchronous operations that happen when records meet, not conditions on writing. Nothing in this spec requires a central sequencer, a coordinator, or a shared clock, and implementations MUST NOT introduce one into the write path.
 
-### Known limitation (v0.1): non-ASCII content
+### Known limitation (still open in v0.2): non-ASCII content
 
-The Python reference serializes with `json.dumps` defaults, which escape non-ASCII characters (`ensure_ascii=True`); the Rust implementation's `serde_json` emits raw UTF-8. Entries containing non-ASCII text therefore produce different bytes — and different hashes — across the two implementations. Byte-exactness in v0.1 is verified for ASCII content only. v0.2 must pin one encoding rule for all implementations.
+The Python reference serializes with `json.dumps` defaults, which escape non-ASCII characters (`ensure_ascii=True`); the Rust implementation's `serde_json` emits raw UTF-8. Entries containing non-ASCII text therefore produce different bytes — and different hashes — across the two implementations. Byte-exactness is verified for ASCII content only. v0.1 said v0.2 must pin one encoding rule; v0.2 shipped the agreement layer instead, and the encoding pin is carried forward, still owed. It is a spec decision, not an implementation detail.
+
+---
+
+## Agreement (v0.2)
+
+v0.1 recorded and verified; it could not agree. This section is the agreement layer. It adds **no new stitch and no new entry fields** — agreement is built entirely from the existing wire format, which is why it can stay this small.
+
+*Why no twelfth stitch:* an exchange booking is a fact about a cell-shaped record — "tenant T records that an exchange happened, with this counterpart, over this payload" — and `BIND` already records exactly that shape. A dedicated `EXCHANGE` opcode would duplicate `BIND`'s fields, force every implementation to grow a second code path, and buy nothing the descriptor below doesn't already say. The stitch count stays at 11, honestly: agreement is a *reading discipline* over bookings, not a new write primitive.
+
+### Exchange bookings
+
+An exchange between two tenants is booked **by each side into its own ledger**, as a `BIND` entry with `kind` = `"exchange"` and `payload` = the descriptor:
+
+```json
+{"peer": "<counterpart tenant identity>", "ph": "<payload hash>", "side": "send", "xchg": "<exchange id>"}
+```
+
+- `xchg` — an exchange identifier, chosen by the participants (any string; unique per pair by convention, like a reference number on a cheque).
+- `side` — `"send"` in the sender's ledger, `"receive"` in the receiver's.
+- `peer` — the counterpart's identity: the receiver in the sender's booking, the sender in the receiver's.
+- `ph` — the payload hash: SHA-256 (hex) of the canonical JSON of the exchanged payload, `json.dumps(payload, sort_keys=True, separators=(",", ":"))`. The payload itself is NOT recorded — the hash is the commitment both sides must match. Booking costs no γ.
+
+The Python helpers are `book_send` / `book_receive`; the descriptor format above is the normative part, not the helpers.
+
+### Audit
+
+A foreign ledger is audited from a local copy, producing a structured verdict: entry count, chain ok or the index of the first broken entry, law ok or the maximum excess over budget, the head hash (hash of the last entry of the valid prefix), and the tenant identity found. The law replay is the one from the v0.1 cross-instance exercise, now library API (`audit_ledger`): γ accumulates each `EFFECT`'s recorded `s` per tenant, resets on `TICK`, and every entry's recorded `g` must equal the replayed running sum and stay within budget. Timestamps are never consulted. If the chain breaks at entry k, the audit's statements cover the valid prefix 0..k−1 only. The audit assumes a per-tenant budget (default `log₂3`); the assumed budget is part of the verdict, because ledgers do not record configured budgets.
+
+### Minting
+
+Given two ledger copies and an exchange id, the agreement operation:
+
+1. Audits BOTH ledgers. A broken chain or a law violation on either side refuses everything.
+2. Finds a SEND booking for the exchange in either ledger; the booking's `ns` is the sender, its `peer` the intended receiver, and the *other* ledger is the counterpart's.
+3. Finds a RECEIVE booking for the same exchange id in the counterpart's ledger.
+4. Mints **only if** the mirror agrees exactly: the receive booking's `ns` equals the sender's `peer`, its `peer` equals the sender, and its `ph` equals the send booking's `ph`.
+
+The minted shared state is the Agreement record itself — `{xchg, sender, receiver, payload_hash}` plus the pins below. It is a derived value: nothing is written to either ledger, and any holder of the two files can re-derive it at any time. The fold of a pair of ledgers (`agreed_state`) is every exchange id booked in either, partitioned into minted and refused.
+
+Every failure is a distinct verdict, never a silent partial fold:
+
+| Reason | Meaning |
+|---|---|
+| `agreed` | Mirror bookings agree; the exchange is shared state. |
+| `no_send` | No SEND booking for this exchange in either ledger. |
+| `missing_mirror` | A SEND was booked; the counterpart ledger has no RECEIVE for it. |
+| `peer_mismatch` | A RECEIVE exists, but it names different parties than the SEND. |
+| `payload_mismatch` | The RECEIVE names the right parties but a different payload hash — the two sides recorded different exchanges under one id. |
+| `chain_broken` | One ledger's hash chain fails (detail names the file and entry index). |
+| `law_violated` | One ledger's replay breaks the conservation law (detail names the file and the violation). |
+
+### The head-hash pin (anchor)
+
+An Agreement pins both ledgers at agreement time: head hash and entry count per side. A later re-audit (`verify_anchor`) compares a ledger against its pin:
+
+- `anchored` — the pinned head is intact at the pinned position. Appends since the pin are fine; the pin is a prefix.
+- `truncated` — fewer entries than pinned, prefix intact: the tail was cut after the pin. **This closes v0.1's tail-truncation blindness for any exchange that was agreed before the cut** — a fresh fold of a truncated pair can still mint (the mirror may survive), but its head differs from the pin, and the pin is what catches it.
+- `rewritten` — the entry at the pinned position carries a different hash.
+- `chain_broken` — the chain fails inside the pinned prefix.
+- `missing` — the file is gone.
+
+Residual limit, honestly: the anchor is only as trustworthy as the pin. A holder must keep the Agreement record itself intact; an attacker who can replace both the ledger AND your stored pin defeats it, as with any hash anchor not witnessed elsewhere. FNV-1a is a tamper-evident canary, not a cryptographic hash — the pin detects truncation and rewriting relative to what you kept, not a forgery crafted against FNV-1a's weaknesses by someone who also controls the pin.
+
+### What agreement does NOT prove
+
+Agreement proves the two *records* agree — that both sides booked the same exchange over the same payload hash, in ledgers that pass audit. It does not prove a ledger copy is authentic (identity is a string claim in v0.2; see Tenant identity), that the payload ever moved, or that the payload hash corresponds to any particular real-world thing. Those are higher layers' problems, deliberately.
 
 ---
 
@@ -190,20 +256,21 @@ The Python reference serializes with `json.dumps` defaults, which escape non-ASC
 
 | Language | Status | Notes |
 |---|---|---|
-| Python | ✅ Reference | `stitch-python/` — full implementation, tests pass |
-| Rust | 🚧 Skeleton | `stitch-rs/` — core types + 2 stitches, demonstrates cross-lang intent |
-| TypeScript | 🚧 Planned | v0.2 |
-| C99 | 🚧 Planned | v0.3 |
+| Python | ✅ Reference | `stitch-python/` — full implementation incl. the v0.2 agreement layer, tests pass |
+| Rust | 🚧 Partial | `stitch-rs/` — core types + `bind` + the v0.2 audit; agreement/minting is Python-first, not yet ported |
+| TypeScript | 🚧 Planned | v0.3 |
+| C99 | 🚧 Planned | v0.4 |
 
 ---
 
 ## Changelog
 
 - **v0.1** (2026-10-26): Initial public spec. 11 stitches, FNV-1a 64-bit hash chain, discrete KL surprise oracle. Python reference implementation. Rust skeleton.
-- **v0.2** (planned): Ed25519 tenant identity, real signatures, TypeScript implementation.
-- **v0.3** (planned): C99 implementation, cross-language test harness, FFI bindings.
-- **v0.4** (planned): Pluggable surprise oracles (KL, hex lattice, SVGD).
-- **v0.5** (planned): Multi-tenant budget pool (shared C, per-tenant quotas).
+- **v0.2** (2026-10-26): The agreement layer. Exchange bookings via `BIND` kind `"exchange"` (no new stitch), foreign-ledger audit as library API, bilateral minting with distinct refusal verdicts, and the head-hash anchor against tail-truncation. Audit also ported to Rust; minting is Python-first. Ed25519 identity and the non-ASCII encoding pin, previously sketched for this version, are deferred (see Tenant identity and the byte-exactness limitation) — the zero-dependency rule and the agreement gap outranked them.
+- **v0.3** (planned): TypeScript implementation; non-ASCII encoding pin.
+- **v0.4** (planned): C99 implementation, cross-language test harness, FFI bindings; Ed25519 identity if a stdlib-free route proves sound.
+- **v0.5** (planned): Pluggable surprise oracles (KL, hex lattice, SVGD).
+- **v0.6** (planned): Multi-tenant budget pool (shared C, per-tenant quotas).
 
 ---
 

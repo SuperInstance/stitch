@@ -40,8 +40,28 @@ from .stitches import (
     revoke,
     withdraw,
 )
+from .agreement import (
+    EXCHANGE_KIND,
+    AGREED,
+    NO_SEND,
+    MISSING_MIRROR,
+    PAYLOAD_MISMATCH,
+    PEER_MISMATCH,
+    CHAIN_BROKEN,
+    LAW_VIOLATED,
+    AuditVerdict,
+    Agreement,
+    AnchorVerdict,
+    payload_hash,
+    book_send,
+    book_receive,
+    audit_ledger,
+    agree,
+    agreed_state,
+    verify_anchor,
+)
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "SuperInstance"
 __license__ = "MIT"
 
@@ -76,4 +96,23 @@ __all__ = [
     "merger",
     "revoke",
     "withdraw",
+    # Agreement (v0.2)
+    "EXCHANGE_KIND",
+    "AGREED",
+    "NO_SEND",
+    "MISSING_MIRROR",
+    "PAYLOAD_MISMATCH",
+    "PEER_MISMATCH",
+    "CHAIN_BROKEN",
+    "LAW_VIOLATED",
+    "AuditVerdict",
+    "Agreement",
+    "AnchorVerdict",
+    "payload_hash",
+    "book_send",
+    "book_receive",
+    "audit_ledger",
+    "agree",
+    "agreed_state",
+    "verify_anchor",
 ]

@@ -14,7 +14,7 @@ A tiny, language-portable substrate primitive for accountable agent state.
 
 - **No central sequencer or coordinator.** A tenant writes to its own ledger file. There is no server to ask, no leader to elect, no lock to take.
 - **No global clock.** The `t` field is the writer's local observation of time. The only ordering that matters is the order of entries inside one ledger, and that is carried by the hash chain itself — not by comparing timestamps across machines.
-- **No synchronous agreement.** Each side keeps its own sovereign record. Verification (replaying a hash chain) and agreement (two sides comparing what they each recorded) can happen later, whenever the records meet — minutes or months after the writes. Shared state is what the records agree on; it is minted by that agreement, not by a store both sides had to touch at write time.
+- **No synchronous agreement.** Each side keeps its own sovereign record. Verification (replaying a hash chain) and agreement (two sides comparing what they each recorded) happen later, whenever the records meet — minutes or months after the writes. In v0.2 that agreement step is library API (`agree`, `agreed_state`), but it is still just a fold over two files: nothing about it requires the sides to be online together, or ever to have been.
 - **Minimal surface, minimal dependencies.** 11 operations, one file format, one hash function. The Python implementation is stdlib-only. Anything that would make a write wait — consensus, routing, scheduling, a runtime — lives in a layer above, or nowhere.
 
 Because a write never blocks on a network, a peer, or a clock, writers scale by simply not coordinating: a thousand independent ledgers are a thousand independent appends. Coordination is deferred to read/verify time, where it can be batched, cached, or skipped — and where being slow is merely slow, never a stall in someone else's write path.
@@ -71,6 +71,49 @@ For each tenant, each tick:
 When a tenant's γ + a new write's surprise would exceed C, the `effect` is **rejected** — it returns `False`, no ledger entry is appended, the cell's payload is not mutated. The caller must either `tick` (reset γ) or accept that the tenant is out of budget for this tick.
 
 This is *not* a thermodynamic law. It is a design invariant that makes agent state budgetable. The number `log₂3` was chosen because one trit is the smallest unit of accountability: you either knew the answer (γ=0), you didn't know but had a fair guess (γ≤1), or you were surprised (γ>1). One trit per tick per tenant is tight but workable.
+
+---
+
+## Agreement: two ledgers mint shared state (v0.2)
+
+A single ledger is one self's truth. Shared state exists only where two selves' records **agree** — and v0.2 makes that a library operation instead of an out-of-band judgement.
+
+An exchange is booked by each side into its *own* ledger, using the existing `bind` stitch (no new opcode — the count stays 11):
+
+```python
+import stitch
+
+# Alice's side, in Alice's ledger:
+stitch.book_send(alice, alice_ledger, xchg="invoice-7", peer="bob",
+                 payload={"doc": "harbor-chart", "rev": 3})
+# Bob's side, in Bob's ledger, whenever it happens:
+stitch.book_receive(bob, bob_ledger, xchg="invoice-7", peer="alice",
+                    payload={"doc": "harbor-chart", "rev": 3})
+```
+
+A booking records the exchange id, the counterpart, and the SHA-256 of the payload — not the payload itself. Later, when the two files meet (any transport, any delay), either side — or a third party holding both copies — derives the verdict:
+
+```python
+verdict = stitch.agree("alice.jsonl", "bob.jsonl", "invoice-7")
+verdict.agreed        # True — the mirror bookings match, both ledgers audit clean
+verdict.payload_hash  # the hash both sides committed to
+verdict.head_a        # Alice's head hash, pinned at agreement time
+
+# Whole fold at once: every exchange booked in either ledger,
+# partitioned into what minted and what was refused (and why).
+minted, refused = stitch.agreed_state("alice.jsonl", "bob.jsonl")
+```
+
+The rules are strict, and every refusal is distinct: no send booked (`no_send`), the mirror never booked (`missing_mirror`), the receive names different parties (`peer_mismatch`), the two sides recorded different payloads under one id (`payload_mismatch`), or either ledger fails audit (`chain_broken`, `law_violated`). Nothing ever partially mints.
+
+The Agreement also pins both ledgers' head hashes. If a ledger's tail is later truncated, `stitch.verify_anchor(path, verdict.head_a, verdict.entries_a)` reports `truncated` — closing the v0.1 blind spot where a shortened ledger still verified clean. Agreement proves the two *records* agree; it does not prove a copy is authentic (identities are string claims until signatures land). Full semantics: [SPEC.md](./SPEC.md), "Agreement (v0.2)".
+
+And the foreign-ledger audit is available on its own:
+
+```python
+v = stitch.audit_ledger("someone-elses.jsonl")
+v.chain_ok, v.chain_broken_at, v.law_ok, v.law_excess, v.head_hash, v.entries
+```
 
 ---
 
@@ -190,7 +233,7 @@ Runs a minimal "agent" (no LLM required — uses a fake deterministic responder)
 cd stitch-python && python -m pytest tests/ -v
 ```
 
-Verifies the conservation law, the hash chain, byte-exactness, and all 11 stitches.
+Verifies the conservation law, the hash chain, byte-exactness, all 11 stitches, and the v0.2 agreement layer (audit, minting, refusals, the head-hash anchor).
 
 ## License
 
@@ -198,9 +241,9 @@ MIT — see [LICENSE](./LICENSE).
 
 ## Status
 
-v0.1.0 — initial public release. The Python reference implementation is complete (39 tests). The Rust crate implements the ledger, the hash chain, `Tenant`, and the `bind` stitch; the remaining stitches are not yet implemented there. TypeScript and C99 are on the roadmap (v0.2, v0.3).
+v0.2.0 — the agreement layer. The Python reference implementation is complete (54 tests): the 11 stitches plus foreign-ledger audit, bilateral minting with distinct refusal verdicts, and the head-hash anchor. The Rust crate implements the ledger, the hash chain, `Tenant`, the `bind` stitch, and (new in v0.2) the audit; minting is Python-first and the remaining stitches are not yet implemented there. TypeScript and C99 are on the roadmap (v0.3, v0.4).
 
-Known v0.1 limitation: byte-exactness between the Python and Rust ledgers is verified for ASCII content. Python's `json.dumps` escapes non-ASCII characters by default while Rust's `serde_json` emits raw UTF-8, so entries containing non-ASCII text hash differently across the two implementations until the encoding is pinned (planned for v0.2). See [VERIFICATION.md](./VERIFICATION.md) for the full test matrix and exactly what has and has not been verified.
+Known limitations, unchanged in kind from v0.1: byte-exactness between the Python and Rust ledgers is verified for ASCII content (the encoding pin is still owed — see SPEC.md); agreement proves records agree, not that a ledger copy is authentic. See [VERIFICATION.md](./VERIFICATION.md) for the full test matrix and exactly what has and has not been verified.
 
 The design is settled. The implementation will mature.
 

@@ -158,9 +158,9 @@ The Border Collie is an orchestrator. The weaver is a scheduler. The JEV fields 
 
 ## Roadmap
 
-- **v0.1** (this release): Python reference + Rust skeleton + spec + tests + demo
-- **v0.2**: Ed25519 tenant identity, real signatures, TypeScript implementation
-- **v0.3**: C99 implementation, cross-language test harness, FFI bindings
+- **v0.1**: Python reference + Rust skeleton + spec + tests + demo
+- **v0.2** (shipped): the agreement layer — exchange bookings, foreign-ledger audit, bilateral minting, head-hash anchor (Python; audit also in Rust). Ed25519 identity, originally sketched here, deferred: not in the Python stdlib, and the zero-dependency rule outranks it
+- **v0.3**: TypeScript implementation, non-ASCII encoding pin
 - **v0.4**: Pluggable surprise oracles (KL, hex lattice, SVGD)
 - **v0.5**: Multi-tenant budget pool (shared C, per-tenant quotas)
 

@@ -1,8 +1,134 @@
-# Verification — stitch v0.1
+# Verification — stitch
 
-Everything below was run for real on 2026-10-26 by Muse, on the rehomed
-copy in this repo. The original draft's own claims were not trusted; where
+Everything below was run for real on 2026-10-26 by Muse, on the copies
+in this repo. The original draft's own claims were not trusted; where
 they were wrong, that's recorded here and in the fixes list.
+
+## v0.2 — the agreement layer (2026-10-26)
+
+v0.1's verification ended with a named gap: stitch verified but did not
+agree — no operation let two sovereign ledgers mint shared state, and the
+cross-instance audit was ~60 lines of glue in an example, not library
+API. v0.2 closes that gap, and this section is its verification record.
+
+**What v0.2 adds** (SPEC.md, "Agreement (v0.2)"):
+
+- Exchange bookings with the existing `BIND` stitch (kind `"exchange"`,
+  payload = `{xchg, side, peer, ph}`) — no new stitch, no new entry
+  fields; the count stays at 11. Helpers: `book_send` / `book_receive`.
+- `audit_ledger` — the v0.1 exercise's audit glue, productised: chain
+  integrity (with first-broken index), conservation-law replay (with
+  maximum excess), head hash, entry count, tenant, assumed budget.
+- `agree` / `agreed_state` — bilateral minting. An exchange is shared
+  state only when both ledgers pass audit AND the mirror bookings agree
+  exactly (exchange id, payload hash, counterpart identities). Refusals
+  are distinct verdicts: `no_send`, `missing_mirror`, `peer_mismatch`,
+  `payload_mismatch`, `chain_broken`, `law_violated`. Nothing partially
+  mints.
+- `verify_anchor` — the head-hash pin. An Agreement records both
+  ledgers' head hash + entry count at agreement time; re-audit against
+  the pin reports `anchored` / `truncated` / `rewritten` /
+  `chain_broken` / `missing`. This closes the tail-truncation blindness
+  recorded in the v0.1 limitations — for exchanges agreed before the
+  cut, and only relative to a pin the holder kept (see SPEC).
+- The audit (not minting) is also ported to Rust.
+
+**Test suite: 54 tests** (39 from v0.1 + 15 new in
+`tests/test_agreement.py`, covering: canonical payload hash; booking
+wire format; audit of clean / forged-law / tampered ledgers; clean
+mint; `no_send` vs `missing_mirror`; payload mismatch; peer mismatch;
+forged-law and tampered rejection inside `agree`; tail-truncation
+caught by the anchor, including the honest case that a fresh fold of
+the truncated pair still mints under a *different* head — the pin is
+what catches it; anchor holding under append-only growth; rewrite and
+missing-file detection).
+
+| Surface | Machine / arch | Python | pytest | cross_lang.py | Demo |
+|---|---|---|---|---|---|
+| This VM | x86_64, Ubuntu, kernel 6.8 (hatch VM) | 3.12.3 | **54/54 pass** | pass | pass |
+| Oracle Cloud | aarch64, OCI Ampere A1 | 3.14.4 | **54/54 pass** | pass | pass |
+| Orin | Jetson Orin Nano Super, aarch64 tegra | 3.12.3 | **54/54 pass** | pass | pass |
+| Thor | Jetson AGX Thor, aarch64 tegra | 3.12.3 | **54/54 pass** | pass | pass |
+| ProArt | x86_64 WSL2 (eileen), RTX 4050 | 3.14.4 | **54/54 pass** | pass | pass |
+
+- **Thor was load-gated again.** Observed before running: load average
+  6.33 / 5.80 / 6.50 on 14 cores (~45%), 78 GiB RAM available, the other
+  agent's workload visibly active (a Foundry Blender mint). Not
+  overloaded, so the suite and exercise ran niced from /tmp, and all
+  scratch was removed afterwards.
+- **Rust: 6/6 on this VM** (the 4 v0.1 tests + 2 new audit tests: clean
+  audit with head-hash match; tamper → `chain_broken_at = 1`; forged
+  s=2.5 ledger → chain ok, law violated, excess = 2.5 − log₂3).
+  **Minting is NOT ported to Rust — v0.2 agreement is Python-first, and
+  this file says so rather than implying parity.** The Rust audit
+  inherits the crate's ASCII-domain caveat (re-serialisation of
+  non-ASCII content differs from Python's, as in v0.1).
+
+**Cross-instance exercise v0.2** (`stitch-python/examples/cross_instance2.py`).
+Five machines each ran stitch as a distinct sovereign self — `vm`
+(witness, books nothing), `oracle`→`orin` and `proart`→`thor` as booked
+pairs. Each pair booked two exchanges: `x-agree` (both sides the same
+payload) and `x-dispute` (the receiver booked a different payload than
+the sender sent). Ledgers were exchanged as plain files. Every machine
+then folded the full bundle with `agreed_state` — library API this
+time, not example glue. **All five derive outputs were byte-identical**
+(md5 `78b8f78f592da8a3f5fd0fedde6e68b9`), 20 lines:
+
+```
+MINT   oracle.jsonl+orin.jsonl x-agree oracle->orin ph=e435cb0a72de
+REFUSE oracle.jsonl+orin.jsonl x-dispute payload_mismatch
+REFUSE oracle.jsonl+proart.jsonl x-agree missing_mirror
+REFUSE oracle.jsonl+proart.jsonl x-dispute missing_mirror
+REFUSE oracle.jsonl+thor.jsonl x-agree peer_mismatch
+REFUSE oracle.jsonl+thor.jsonl x-dispute peer_mismatch
+REFUSE oracle.jsonl+vm.jsonl x-agree missing_mirror
+REFUSE oracle.jsonl+vm.jsonl x-dispute missing_mirror
+REFUSE orin.jsonl+proart.jsonl x-agree peer_mismatch
+REFUSE orin.jsonl+proart.jsonl x-dispute peer_mismatch
+REFUSE orin.jsonl+thor.jsonl x-agree no_send
+REFUSE orin.jsonl+thor.jsonl x-dispute no_send
+REFUSE orin.jsonl+vm.jsonl x-agree no_send
+REFUSE orin.jsonl+vm.jsonl x-dispute no_send
+MINT   proart.jsonl+thor.jsonl x-agree proart->thor ph=e435cb0a72de
+REFUSE proart.jsonl+thor.jsonl x-dispute payload_mismatch
+REFUSE proart.jsonl+vm.jsonl x-agree missing_mirror
+REFUSE proart.jsonl+vm.jsonl x-dispute missing_mirror
+REFUSE thor.jsonl+vm.jsonl x-agree no_send
+REFUSE thor.jsonl+vm.jsonl x-dispute no_send
+```
+
+What this proves: the two genuinely-mirrored exchanges minted on every
+machine, including the witness that took no part in them; the two
+disputed exchanges minted nowhere; and every non-pair fold refused with
+the correct distinct reason. Five physical selves, files alone, no
+coordinator, no shared clock — identical shared state, derived
+independently. The v0.1 claim (verification works asynchronously) now
+extends to agreement itself.
+
+**What v0.2 still does not solve** (stated, not smoothed over):
+
+- **Copy authenticity.** Identity is still a string claim; there are no
+  signatures (Ed25519 deferred — not in the Python stdlib, and the
+  zero-dependency rule outranks it). Agreement proves two *records*
+  agree; a fabricated copy of someone's ledger would "agree" with
+  itself. Hold copies you trust, or witness head hashes out-of-band.
+- **Agreement ≠ performance.** A minted exchange proves both sides
+  booked the same payload hash. It does not prove the payload moved,
+  was read, or corresponds to anything real.
+- **Budgets still are not recorded in ledgers.** The audit carries its
+  assumed budget in the verdict, but a custom-budget tenant still
+  cannot prove its budget from its ledger alone.
+- **The anchor trusts the pin.** Truncation/rewrite detection is
+  relative to an Agreement record the holder kept intact; FNV-1a is a
+  canary, not a cryptographic hash.
+- **Bilateral only.** Minting is defined for two ledgers. N-party
+  agreement is pairwise folds, by design — no group primitive was
+  added.
+- **Non-ASCII encoding pin still owed** (see SPEC byte-exactness).
+
+---
+
+# v0.1 record (2026-10-26)
 
 ## Test matrix — Python suite (39 tests), demo, cross-language harness
 

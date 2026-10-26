@@ -14,6 +14,13 @@
 //! yet implemented — they follow the same pattern as bind. See SPEC.md
 //! for the canonical wire format.
 //!
+//! v0.2 adds `audit_ledger` — the foreign-ledger audit (hash chain +
+//! conservation-law replay) mirroring `stitch.agreement.audit_ledger` in
+//! Python. The agreement/minting operation itself is Python-first and
+//! not yet ported. The audit inherits the crate's known domain limit:
+//! re-serialisation matches Python byte-for-byte for ASCII content (see
+//! the non-ASCII limitation in SPEC.md).
+//!
 //! The full Rust implementation is on the v0.2 roadmap. This skeleton proves
 //! the byte-exactness contract holds across languages.
 
@@ -264,6 +271,130 @@ impl Ledger {
 }
 
 // ============================================================================
+// Foreign-ledger audit (v0.2) — mirrors stitch.agreement.audit_ledger
+// ============================================================================
+
+/// The result of auditing one ledger file: hash-chain integrity plus a
+/// conservation-law replay over the valid prefix. Mirrors the Python
+/// `AuditVerdict` (the Python version additionally returns the list of
+/// human-readable violation strings; this port returns the verdict
+/// fields and the maximum law excess).
+#[derive(Debug, Clone)]
+pub struct AuditVerdict {
+    pub tenant: Option<String>,
+    pub entries: usize,
+    pub chain_ok: bool,
+    pub chain_broken_at: Option<usize>,
+    pub law_ok: bool,
+    pub law_excess: f64,
+    pub head_hash: Option<String>,
+    pub budget: f64,
+}
+
+/// Audit a foreign ledger from a local copy: verify the hash chain and
+/// replay the conservation law (γ accumulates each EFFECT's `s` per
+/// tenant, resets on TICK, recorded `g` must match the running sum and
+/// stay within `budget`). Reads only; never opens the file for append.
+pub fn audit_ledger(path: impl AsRef<Path>, budget: f64) -> std::io::Result<AuditVerdict> {
+    let content = std::fs::read_to_string(path.as_ref())?;
+    let mut entries: Vec<serde_json::Value> = Vec::new();
+    let mut chain_broken_at: Option<usize> = None;
+    let mut last = FNV_OFFSET;
+    let mut head_hash: Option<String> = None;
+    for (i, line) in content
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .enumerate()
+    {
+        let mut entry: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => {
+                chain_broken_at = Some(i);
+                break;
+            }
+        };
+        let obj = match entry.as_object_mut() {
+            Some(o) => o,
+            None => {
+                chain_broken_at = Some(i);
+                break;
+            }
+        };
+        let h_str = match obj.remove("h").and_then(|v| v.as_str().map(String::from)) {
+            Some(s) => s,
+            None => {
+                chain_broken_at = Some(i);
+                break;
+            }
+        };
+        let line_without_hash = match serde_json::to_string(&entry) {
+            Ok(s) => s,
+            Err(_) => {
+                chain_broken_at = Some(i);
+                break;
+            }
+        };
+        let expected = fnv1a_64(&line_without_hash, last);
+        if format!("{:016x}", expected) != h_str {
+            chain_broken_at = Some(i);
+            break;
+        }
+        last = u64::from_str_radix(&h_str, 16).unwrap_or(last);
+        head_hash = Some(h_str);
+        entries.push(entry);
+    }
+
+    // Conservation-law replay over the valid prefix.
+    let mut gamma: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    let mut law_ok = true;
+    let mut law_excess = 0.0f64;
+    for e in &entries {
+        let ns = e
+            .get("ns")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string();
+        let op = e.get("op").and_then(|v| v.as_str()).unwrap_or("");
+        let g = gamma.entry(ns).or_insert(0.0);
+        if op == "EFFECT" {
+            *g += e.get("s").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        } else if op == "TICK" {
+            *g = 0.0;
+        }
+        let recorded = e.get("g").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        if (recorded - *g).abs() > 1e-6 {
+            law_ok = false;
+        }
+        if *g > budget + 1e-9 {
+            law_ok = false;
+            law_excess = law_excess.max(*g - budget);
+        }
+    }
+
+    let tenants: std::collections::HashSet<&str> = entries
+        .iter()
+        .filter_map(|e| e.get("ns").and_then(|v| v.as_str()))
+        .collect();
+    let tenant = if tenants.len() == 1 {
+        tenants.iter().next().map(|s| s.to_string())
+    } else {
+        None
+    };
+
+    Ok(AuditVerdict {
+        tenant,
+        entries: entries.len(),
+        chain_ok: chain_broken_at.is_none(),
+        chain_broken_at,
+        law_ok,
+        law_excess,
+        head_hash,
+        budget,
+    })
+}
+
+// ============================================================================
 // Errors
 // ============================================================================
 
@@ -408,6 +539,74 @@ mod tests {
             "{\"g\":0.0,\"h\":\"24c56ec21ef20816\",\"ns\":\"alice\",\"op\":\"TICK\",\"t\":2000}\n",
         );
         assert_eq!(bytes, expected);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_audit_clean_ledger() {
+        let temp = std::env::temp_dir();
+        let path = temp.join(format!("stitch_rs_audit_{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let mut ledger = Ledger::open(&path).unwrap();
+        ledger.append(json!({
+            "t": 1i64, "ns": "alice", "op": "BIND", "cell": "abc", "g": 0.0,
+        })).unwrap();
+        let h2 = ledger.append(json!({
+            "t": 2i64, "ns": "alice", "op": "EFFECT", "cell": "abc",
+            "k": "status", "v": "alive", "s": 0.5, "g": 0.5,
+        })).unwrap();
+        drop(ledger);
+
+        let v = audit_ledger(&path, LOG2_3).unwrap();
+        assert!(v.chain_ok);
+        assert!(v.law_ok);
+        assert_eq!(v.entries, 2);
+        assert_eq!(v.tenant.as_deref(), Some("alice"));
+        assert_eq!(v.head_hash.as_deref(), Some(h2.as_str()));
+        assert_eq!(v.law_excess, 0.0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_audit_detects_tamper_and_law_violation() {
+        let temp = std::env::temp_dir();
+
+        // Tamper: one recorded value altered, hashes untouched.
+        let path = temp.join(format!("stitch_rs_audit_tamper_{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut ledger = Ledger::open(&path).unwrap();
+        ledger.append(json!({
+            "t": 1i64, "ns": "alice", "op": "BIND", "cell": "abc", "g": 0.0,
+        })).unwrap();
+        ledger.append(json!({
+            "t": 2i64, "ns": "alice", "op": "EFFECT", "cell": "abc",
+            "k": "status", "v": "alive", "s": 0.5, "g": 0.5,
+        })).unwrap();
+        drop(ledger);
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, text.replace("\"alive\"", "\"a1ive\"")).unwrap();
+        let v = audit_ledger(&path, LOG2_3).unwrap();
+        assert!(!v.chain_ok);
+        assert_eq!(v.chain_broken_at, Some(1));
+        let _ = std::fs::remove_file(&path);
+
+        // Forgery: chain-valid entries claiming s=2.5 in one tick.
+        let path = temp.join(format!("stitch_rs_audit_forge_{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut ledger = Ledger::open(&path).unwrap();
+        ledger.append(json!({
+            "t": 1i64, "ns": "mallory", "op": "BIND", "cell": "abc", "g": 0.0,
+        })).unwrap();
+        ledger.append(json!({
+            "t": 2i64, "ns": "mallory", "op": "EFFECT", "cell": "abc",
+            "k": "status", "v": "done", "s": 2.5, "g": 2.5,
+        })).unwrap();
+        drop(ledger);
+        let v = audit_ledger(&path, LOG2_3).unwrap();
+        assert!(v.chain_ok);
+        assert!(!v.law_ok);
+        assert!((v.law_excess - (2.5 - LOG2_3)).abs() < 1e-9);
         let _ = std::fs::remove_file(&path);
     }
 
