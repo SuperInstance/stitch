@@ -38,7 +38,7 @@ and each runs alone:
 ```bash
 python3 producer.py --out out/producer
 cp out/producer/report.json <wherever the receiver lives>   # any transport
-python3 receiver.py --inbox <that dir> --out out/receiver
+python3 receiver.py --inbox <that dir> --out out/receiver   # --inbox is the dir CONTAINING report.json
 python3 derive_receipt.py --producer out/producer/producer.jsonl \
                           --receiver out/receiver/receiver.jsonl
 ```

@@ -629,3 +629,25 @@ PyPI (a publication decision, not a code gap); the Rust crate's audit
 still judges v0.3 ledgers against the assumed budget (Python-first,
 documented); no CI yet runs the install route in a clean venv — the
 cold agent suggested one, and it is the right next hardening step.
+
+**Cold test #2 (same day, against fc34d8b after the overhaul).** A
+second cold agent re-ran the gauntlet: **all tasks passed** — clean-venv
+pip install, verbatim Quick start from a neutral directory, 150 tests
+from the repo root and from `stitch-python/`, Tutorial 02 driven by
+hand (mint on clean delivery, `payload_mismatch` on a one-byte tamper,
+hashes matching the tutorial README's quoted values exactly), and an
+original inbox-triage journal adapted from Tutorial 01 (custom budget
+2.0 on both knobs, cold audit PASS, a tampered copy caught at entry 3).
+Twelve previously-broken items were verified fixed *by running them*.
+Remaining friction: **0 blockers, 1 major, 4 minor** (from 2/4/9). The
+major: the one-key-per-`effect` rule was stated in no markdown doc —
+an adapter journaling two facts in one call under a key naming neither
+got a committed, audit-passing entry recording `v: null`, silently.
+Fixed in docs the same day (tutorials primer, Tutorial 01, README's
+stitch table). The four minors (Tutorial 02's `--inbox` semantics,
+`# ADAPT:` marker consistency, a Quick start pointer back to
+Installation, AGENTS.md's cargo line) were fixed with it. An API
+question the finding raises — should `effect` *refuse* a key absent
+from both dicts instead of recording null? — is a behaviour change,
+not a doc fix, and is left as an explicit open question for the next
+version rather than decided silently here.

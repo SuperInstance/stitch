@@ -29,14 +29,18 @@ JOURNAL = HERE / "journal.jsonl"
 
 
 def process_note(agent, ledger, surprise, note_path: Path) -> int:
-    """Record one note in the journal. Returns its ACTION count."""
+    """Record one note in the journal. Returns its ACTION count.
+    # ADAPT: this whole function is the job — replace the note-reading
+    with your own task; keep the shape (bind, one effect per fact,
+    tick per unit of work)."""
     text = note_path.read_text(encoding="utf-8")
     actions = [ln for ln in text.splitlines() if ln.startswith("ACTION:")]
 
     cell = stitch.bind(agent, ledger, kind="note",
                        payload={"file": note_path.name})
 
-    # The agent's honest prior: "this note has no action items."
+    # ADAPT: the prediction is your agent's prior about its work.
+    # The agent's honest prior here: "this note has no action items."
     # If that prediction is wrong, the write costs surprise — 1 bit for
     # the one key that differs. A quiet note costs 0. That cost is the
     # accountability: an agent that is surprised by everything runs out

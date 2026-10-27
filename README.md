@@ -39,7 +39,7 @@ The conservation law `γ + η ≤ log₂3` is the Shannon information content of
 |---|---|---|
 | `bind(tenant, ledger, kind, payload, parent_hash=None)` | Create a new cell | 0 (free) |
 | `link(tenant, ledger, cell_a, cell_b, relation)` | Declare a relation between two cells | 0 |
-| `effect(tenant, ledger, surprise, cell, key, predicted, observed)` | Write to a cell | γ += surprise(predicted, observed) |
+| `effect(tenant, ledger, surprise, cell, key, predicted, observed)` | Write one key of a cell (the entry records `v = observed[key]`; surprise is charged over the whole dicts — one call per fact) | γ += surprise(predicted, observed) |
 | `view(cell, key=None)` | Read from a cell (free, not logged) | 0 |
 | `tick(tenant, ledger)` | Advance time, reset γ to 0 | resets γ |
 
@@ -168,6 +168,7 @@ instead of the library and then fail with
 ## Quick start
 
 ```python
+# requires: `import stitch` resolvable — see Installation above
 import stitch
 
 # Set up a tenant with the default log₂3 budget

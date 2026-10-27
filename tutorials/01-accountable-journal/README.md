@@ -48,6 +48,12 @@ AUDIT: PASS
   per-tick budget (γ). The quiet note costs 0. The journal therefore
   shows not just *what* the agent did but *where reality differed from
   its expectations* — usually the part a supervisor cares about.
+- **One effect, one fact.** Each `effect` call writes exactly one
+  key: the entry records `v = observed[key]`. Surprise, though, is
+  charged over the whole predicted/observed dicts. `work.py` makes one
+  call per fact (actions, then verdict) for this reason — bundling two
+  facts into one call under a key that names neither records
+  `v: null`, silently.
 - **Rejection is normal flow.** Monday's second write would have taken
   γ to 2.0 against a 1.585 budget, so `effect` returned `False`,
   appended nothing, and mutated nothing. The worker ticks and retries.

@@ -52,7 +52,7 @@ no shared clock, no server. Ledgers sync by plain file copy.
 python3 stitch-python/examples/minimal_agent.py            # demo
 python3 -m venv .venv && .venv/bin/pip install pytest      # suite needs pytest
 .venv/bin/python -m pytest stitch-python/tests/            # 150 tests, from root or inside stitch-python/
-(cd stitch-rs && cargo test)                               # 6 Rust tests (optional)
+(cd stitch-rs && cargo test)                               # 6 Rust tests — skip if cargo is absent; Rust is not needed for the Python library
 bash tutorials/02-agent-handoff/run_demo.sh                # a tutorial end-to-end
 ```
 

@@ -13,6 +13,8 @@ to produce the outputs quoted in its README.
 | [03 — Corroborated observers](03-corroborated-readings/) | Independent observers/devices record the same event offline; later, only the corroborated version should count | sovereign ledgers, file-copy sync, per-observer minting, quorum as an application-level fold, tamper exclusion |
 
 New here? Do them in order — each builds on the previous one's ideas.
+Adaptation points inside the tutorial code are marked `# ADAPT:` —
+grep for it.
 
 ## Before any tutorial: five things that will save you an hour
 
@@ -44,7 +46,15 @@ New here? Do them in order — each builds on the previous one's ideas.
    minted), `.detail` (human-readable specifics), and the head pins
    `.head_a` / `.entries_a` / `.head_b` / `.entries_b` for
    `verify_anchor`.
-5. **What agreement does not prove.** Agreement proves two *records*
+5. **One `effect` writes one key.** The entry records
+   `v = observed[key]`, and the cell's `payload[key]` becomes that
+   value — while surprise is charged over the *whole* predicted and
+   observed dicts. Every example pairs the key with single-key dicts,
+   which hides the rule until you journal two facts in one call with a
+   key that names neither: that commits, charges γ, passes audit, and
+   silently records `v: null`. To record two facts, make two `effect`
+   calls (and budget for both). (Found by cold test #2, 2026-10-27.)
+6. **What agreement does not prove.** Agreement proves two *records*
    booked the same thing in ledgers that pass audit. It does not prove
    a ledger copy is authentic, that a payload ever moved, or that a
    reading is true. Identity is a string claim; signed attestations
