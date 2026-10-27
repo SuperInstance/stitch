@@ -387,6 +387,197 @@ Verified during adoption, not merely round-tripped: the RFC 8032 §7.1 vectors (
 
 ---
 
+## Signed bookings (proposed)
+
+### Motivation
+
+Agreement bookings in v0.2/v0.3 are unsigned: identity is a string
+claim, and a fresh ledger that merely claims a party's identity and
+mirrors its booking mints against a genuine ledger (VERIFICATION,
+functional test §J). v0.3 signed ATTEST entries only. This section adds
+opt-in signatures to the bookings themselves, so an auditor who holds
+a party's public key can require proof that the party actually booked
+the exchange — without changing any behaviour for anyone who does not
+opt in, on either side.
+
+### The signed booking record
+
+A booking remains a `BIND` entry of kind `"exchange"`. No stitch is
+added; the count stays 11.
+
+With no secret key, the booking payload (the *descriptor*) is exactly
+the v0.2 form:
+
+```json
+{"peer": "<counterpart>", "ph": "<payload hash>", "side": "send|receive", "xchg": "<exchange id>"}
+```
+
+A writer MAY sign a booking by passing a 32-byte Ed25519 secret key to
+`book_send` / `book_receive` (`secret_key=` parameter). A signed
+descriptor carries one additional key:
+
+```json
+{..., "sig": "<128 lowercase hex chars>"}
+```
+
+`sig` is the RFC 8032 Ed25519 signature, hex-encoded, over the
+**signing material** defined below. Writers SHOULD use the public
+key's 64-char lowercase hex as their tenant identity
+(`Key.identity`), so that a ledger's `ns` field itself names the
+verifying key; this is a recommendation, not a requirement (see
+"Binding" below).
+
+### Signing material
+
+The signing material is the UTF-8 encoding of the canonical JSON
+(sorted keys, `(",", ":")` separators, `ensure_ascii=False` — the
+byte-exactness pin) of exactly this object:
+
+```json
+{"peer": "<counterpart>", "ph": "<payload hash>", "side": "send|receive",
+ "tenant": "<booking tenant identity — the entry's ns>",
+ "v": "stitch-booking/1", "xchg": "<exchange id>"}
+```
+
+The `"v"` field is domain separation and versioning: a booking
+signature is never valid as an ATTEST signature (whose material is the
+string `"<tenant>:<cell>:<claim>"`) or vice versa, and a future format
+revision MUST use a new tag rather than reinterpret signatures made
+under this one.
+
+The material covers exactly the booking's commitment fields. It does
+NOT cover the cell id (which is derived from the descriptor, signature
+included — covering it would be circular), the entry timestamp, the
+entry's position, or the containing ledger. The consequences of that
+scope are stated in "What a booking signature does NOT prove".
+
+### Auditor enforcement: `booking_keys`
+
+`agree`, `agreed_state`, `agree_n`, and `agreed_state_n` accept an
+optional parameter:
+
+```
+booking_keys: {tenant identity: Ed25519 public key}   # bytes or 64-char hex
+```
+
+Semantics:
+
+1. When `booking_keys` is `None` (the default), no signature work is
+   performed and every verdict is exactly as in v0.3. An auditor who
+   supplies no keys gets today's semantics, in full.
+2. When a key is supplied for a party, EVERY booking for the exchange
+   under consideration, in EVERY ledger under consideration, whose
+   entry `ns` equals that party, is signature-checked. (Not only the
+   booking that would mirror: an auditor must never have to guess
+   which of several bookings is "the real one".)
+3. A checked booking with no `sig` key, or a `sig` that is not 128
+   hex chars, refuses the exchange with reason **`unsigned_booking`**.
+4. A checked booking whose signature does not verify against the
+   supplied key over the signing material refuses the exchange with
+   reason **`bad_signature`**.
+5. Enforcement order: chain audit, then law audit, then signature
+   enforcement, then the existing mirror semantics. Signature refusal
+   therefore outranks `no_send` / `missing_mirror` /
+   `payload_mismatch` / `peer_mismatch` for the same exchange
+   (fail-closed), and never masks a chain or law failure.
+6. Enforcement is per-party. A party with no supplied key is not
+   checked; its bookings are judged by the v0.3 rules alone. An
+   auditor who wants every party held to signatures MUST supply a key
+   for every party. Supplying an empty map is equivalent to supplying
+   none.
+7. `booking_keys` values are the auditor's assertion of which key
+   belongs to which identity. Keying a party to the WRONG key refuses
+   even a genuine pair (with `bad_signature`); this is correct
+   behaviour, not a malfunction — see "Binding".
+
+New reason constants: `stitch.UNSIGNED_BOOKING == "unsigned_booking"`,
+`stitch.BAD_SIGNATURE == "bad_signature"`. The split is deliberate and
+mirrors the ATTEST audit's verified / unsigned / failures trichotomy:
+"this party never signed" and "this signature is wrong" are different
+facts and call for different responses.
+
+### What a booking signature proves
+
+Exactly one thing: **the holder of the secret key corresponding to
+the auditor-supplied public key produced this booking** — this
+exchange id, this side, this counterpart, this payload hash, under
+this tenant identity string. Forging a booking — inventing an exchange
+the key holder never booked, or altering any covered field of one
+they did — requires the key. In particular, the §J impostor (a fresh
+ledger claiming the victim's identity and mirroring the booking)
+refuses under enforcement: `unsigned_booking` if it books bare,
+`bad_signature` if it signs with any other key.
+
+### What a booking signature does NOT prove
+
+Stated with the same plainness as the rest of this specification:
+
+- **Not key-to-identity binding.** The signature binds a booking to a
+  KEY. That the key belongs to the person or machine named by the
+  identity string is established out of band, exactly as in v0.3's
+  ATTEST signatures. If identity strings are public-key hex, the
+  binding is self-describing but still not self-proving: anyone can
+  claim any hex string as their `ns`; what they cannot do is sign as
+  it without the secret key.
+- **Not ledger provenance.** The material does not cover the
+  containing ledger, so a genuine signed booking can be replayed
+  verbatim — copied as a raw entry into a different ledger claiming
+  the same `ns` — and will verify. This is a real residual, measured
+  in the prototype (REPORT.md). It is bounded by what a replay IS: the
+  presentation of a statement the key holder genuinely made, with its
+  content unaltered. A replay cannot change the payload hash, the
+  counterpart, or the side, and cannot mint an exchange the key
+  holder never booked. Deployments that need provenance of the FILE
+  (this ledger, this head, this history) need a different mechanism —
+  e.g. signed head-hash attestations over the ledger's own chain —
+  which is deliberately out of scope here.
+- **Not that the payload moved, was read, or corresponds to anything
+  real.** Unchanged from v0.3: the signature covers the payload HASH,
+  as the booking always did.
+- **Not honesty of budgets or surprise inputs.** Unchanged, and
+  unrelated: declarations remain self-declared, auditable rather than
+  truthful.
+- **Not freshness.** Bookings carry no nonce and no trusted time
+  (there is no shared clock, by design). A signed booking from a
+  previous, real exchange is valid whenever it is presented.
+
+### Migration notes for existing ledgers
+
+- **No migration is required.** v0.1–v0.3 ledgers contain only unsigned
+  bookings; they audit, agree, and fold exactly as before under any
+  auditor that supplies no keys, byte-identical verdicts included.
+- **Mixed ledgers are expected and safe.** A ledger may contain
+  unsigned bookings (written before adoption, or by a writer who never
+  opts in) and signed ones side by side; the chain does not care.
+  Under enforcement, a keyed party's UNSIGNED bookings refuse their
+  exchanges (`unsigned_booking`) — so enforcement should be switched
+  on per-counterparty only once that counterparty actually signs, or
+  historical exchanges with that party will refuse. This is the
+  intended fail-closed reading, but deployers must expect it.
+- **Old software reading new ledgers:** a v0.3 reader auditing a
+  ledger with signed bookings sees a descriptor with an extra `sig`
+  key. The audit and agreement code of v0.3 ignores unknown descriptor
+  keys (verified by construction: it reads `xchg`/`side`/`peer`/`ph`
+  only), so old readers mint/refuse exactly as v0.3 semantics dictate —
+  they simply cannot enforce. The one visible difference is cell ids:
+  a signed booking's cell id is computed over the descriptor including
+  `sig`, so signed and unsigned bookings of identical content have
+  different cell ids. Cell ids are per-ledger artefacts and are never
+  compared across versions or ledgers.
+- **Rust:** the crate's audit is unaffected (it does not read
+  descriptors). A Rust port of enforcement is future work; as with the
+  v0.3 features, this is Python-first and must be documented as such
+  wherever it ships.
+- **Performance:** signature verification is pure-Python Ed25519
+  (~270 ms per verify on a small VM, as recorded for ATTEST in
+  v0.3's notes). Enforcement costs one verify per booking per keyed
+  party — fine at ledger scale, noticeable in bulk folds of large
+  ledgers. `agreed_state` under enforcement re-verifies per exchange;
+  caching verified (ledger head, xchg) pairs is a safe optimisation
+  left to implementers.
+
+---
+
 ## Implementation status
 
 | Language | Status | Notes |
