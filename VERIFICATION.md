@@ -75,7 +75,22 @@ sign/verify on this VM).
 | Oracle cloud VM (aarch64, Python 3.14.4) | 150 passed; cross_lang PASSED; minimal_agent rc 0 |
 | Jetson Orin Nano (aarch64) | 150 passed; cross_lang PASSED; minimal_agent rc 0 |
 | Jetson AGX Thor (aarch64, niced under another agent's load) | 150 passed; cross_lang PASSED; minimal_agent rc 0 |
-| ProArt WSL (x86_64) | **PENDING — box off.** Both doors checked three times on 2026-10-26 evening: the Oracle tunnel slot refuses and the Thor LAN-hub listener for the ProArt is absent, i.e. WSL is not running. The leg runs unchanged against this commit when the box is next up; until then this row claims nothing. |
+| ProArt WSL (x86_64) | 150 passed; cross_lang PASSED; minimal_agent rc 0 |
+
+**ProArt leg completed 2026-10-27** (the pending row above, closed):
+run unchanged against commit `c84eabd` on eileen (x86_64 WSL2,
+Python 3.14.4, pytest 9.1.1), reached via the Thor LAN hub
+(`ssh proart-lan` from the Thor, 192.168.0.78:2206) because the direct
+Oracle-slot route resets at the egress proxy while the box is healthy.
+The run was executed live in a dedicated tmux session (`stitch`, window
+`leg`) at Casey's request so he could watch from the desk, and teed to
+`~/stitch-v03-proart.log` on the ProArt: 150 passed in 5.61 s,
+cross_lang PASSED, minimal_agent rc 0. As a bonus beyond the matrix,
+`cargo test` also ran there (cargo 1.99.1): 6/6 passed. The code
+tarball was transferred VM → Thor → ProArt by scp at each hop with
+sha256 verified identical on all three machines
+(`6e82b5733a7f3fcbe4724ad225afd8232cd8daddc3fb8199261a509551aec00f`).
+All five surfaces are now verified for v0.3.0.
 
 Rust: `cargo test` 6/6 on this VM, crate byte-identical to v0.2 apart
 from the version bump — the v0.3 features are Python-first and the docs
