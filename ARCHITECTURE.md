@@ -158,11 +158,14 @@ The Border Collie is an orchestrator. The weaver is a scheduler. The JEV fields 
 
 ## Roadmap
 
-- **v0.1**: Python reference + Rust skeleton + spec + tests + demo
-- **v0.2** (shipped): the agreement layer — exchange bookings, foreign-ledger audit, bilateral minting, head-hash anchor (Python; audit also in Rust). Ed25519 identity, originally sketched here, deferred: not in the Python stdlib, and the zero-dependency rule outranks it
-- **v0.3**: TypeScript implementation, non-ASCII encoding pin
-- **v0.4**: Pluggable surprise oracles (KL, hex lattice, SVGD)
-- **v0.5**: Multi-tenant budget pool (shared C, per-tenant quotas)
+*Retired as a separate roadmap on 2026-10-27 (three documents carried
+three disagreeing futures; a cold test caught it). The single living
+roadmap is the changelog at the end of SPEC.md. Historical note, for
+accuracy: this page originally sketched v0.3 as "TypeScript +
+non-ASCII pin" — v0.3 actually shipped the encoding pin, budget
+declarations, N-party agreement, and opt-in Ed25519, with TypeScript
+still planned. What shipped is recorded in SPEC's changelog and
+VERIFICATION.md, not here.*
 
 Things deliberately *out of scope* for `stitch`:
 - LLM integration

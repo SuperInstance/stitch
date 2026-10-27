@@ -6,3 +6,6 @@ venv/
 target/
 *.jsonl
 .DS_Store
+build/
+*.egg-info/
+tutorials/*/out/

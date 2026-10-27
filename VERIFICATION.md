@@ -1,8 +1,9 @@
 # Verification — stitch
 
-Everything below was run for real on 2026-10-26 by Muse, on the copies
-in this repo. The original draft's own claims were not trusted; where
-they were wrong, that's recorded here and in the fixes list.
+Everything below was run for real, on the dates each section carries
+(2026-10-26 and 2026-10-27), by Muse, on the copies in this repo.
+The original draft's own claims were not trusted; where they were
+wrong, that's recorded here and in the fixes list.
 
 ## v0.3 — adoption of the GLM draft, with fixes (2026-10-26)
 
@@ -544,3 +545,87 @@ from files alone. The missing half is agreement: stitch records each
 side's truth impeccably and verifies the other's, but the step where two
 sides mint shared state is still outside the library, waiting to be
 designed as deliberately as the rest.
+
+## Cold test & documentation overhaul (2026-10-27)
+
+**Method.** The repo was tested from the outside, as a new arrival
+would meet it: a fresh public clone at `1dbcf0b`, a clean venv, and
+every documented command run literally. Two independent tracks: (1) a
+cold agent given only the repo's markdown docs, tasked with learning
+the concepts, running the suite and every example, answering four
+questions from docs alone, and writing a working two-agent program
+(it did — first run, mint on mirror and `payload_mismatch` on dispute,
+built almost entirely from README's Agreement section); (2) a literal
+run of every README instruction, code block and install route.
+Caveat, recorded for honesty: the cold agent ran as a subagent with
+inherited conversation context, so its coldness was imperfect; the
+literal track had no such contamination, and the two tracks' findings
+agreed on every blocker.
+
+**Findings — 15 friction items (cold agent) + 13 (literal track),
+deduplicated to the load-bearing set:**
+
+- **B1 (blocker): `pip install` was entirely broken.** `pyproject.toml`
+  referenced `readme = "../README.md"` and a `LICENSE` file outside the
+  project root; setuptools refused to build, plain and `-e`. This
+  file's v0.1 section even recommended the broken `-e` route.
+- **B2 (blocker): the PyPI route doesn't exist.** No distribution named
+  `stitch-substrate` on PyPI (checked 2026-10-27); README's "(when
+  published)" hedge gave no way to tell.
+- **M1: SPEC's `attest` signature was printed with cell and claim
+  swapped**; following it positionally crashed
+  (`AttributeError: 'str' object has no attribute 'id'`).
+- **M2: the two-budget trap.** `declare_budget` records a budget for
+  auditors but does not change write-time enforcement; the enforcing
+  knob (`Tenant(budget=…)`) appeared in no markdown doc. Verified:
+  after declaring 3.0, a tenant's budget stays 1.5850 and a 2-bit tick
+  is still rejected.
+- **M3: test setup undocumented.** Clean env → `No module named pytest`;
+  suite run from the repo root failed collection (9 errors); commands
+  assumed a `python` binary.
+- **M4: quiet specification rot.** SPEC's payload-hash formula omitted
+  `ensure_ascii=False` (diverges for non-ASCII for any re-implementer;
+  the library itself was correct); SPEC's Tenant-identity section was
+  stale v0.2 text contradicted later in the same file; three documents
+  carried three different roadmaps; SPEC's N-party section listed
+  reason *constant names* where runtime values are lowercase strings;
+  README's stitch table used the keyword `to` as a parameter name
+  (actual: `to_identity`); SPEC's crypto examples never said messages
+  must be `bytes`; verdict-object fields (notably `.reason`) were
+  never listed in one place; ledger lifecycle (flush-per-append,
+  `close()`, one-writer-per-file) appeared in no user-facing doc;
+  examples other than `minimal_agent.py` had no documented invocation;
+  `functional_scenario.py --help` exited 1; this file's banner dated
+  everything 2026-10-26 while containing 2026-10-27 sections.
+- **What carried the cold agent** (kept intact): README's Agreement
+  section as a complete correct recipe, the documented test command's
+  claimed count of 150, SPEC's budget/N-party/Ed25519 sections'
+  semantics, and limitations stated in the docs rather than discovered
+  in code — the cold agent learned all ten honest boundaries from the
+  docs alone.
+
+**Fixes applied in this pass:** `pyproject.toml` readme inlined and
+license fixed (`pip install` and `pip install -e` both verified in a
+clean venv; a `test` extra declares pytest); `tests/conftest.py` puts
+the package on `sys.path` so the suite runs from the repo root as well
+(150/150 both ways); `functional_scenario.py` grew a real `--help`
+(exit 0); SPEC corrected (attest order, payload-hash formula, tenant
+identity, N-party reasons, a verdict-fields table, the two-knobs
+paragraph, ledger close in the budget example); README rewritten where
+it misled (installation with honest PyPI status, quickstart budget and
+lifecycle notes, examples table, tests with pytest setup,
+`to_identity`); ARCHITECTURE's roadmap retired to a pointer at SPEC's
+changelog; the stale `Tenant` docstring in `core.py` updated. And the
+educational layer the cold repo lacked entirely: **AGENTS.md** (map,
+reading order, run-everything commands, the five traps, invariants,
+never-overclaim list) and **tutorials/** — three complete templates
+for real jobs (accountable journal; agent-to-agent handoff with
+derived receipt; corroborated observers), each executed end-to-end to
+produce the outputs quoted in its README, including the refusal and
+tamper paths.
+
+**Still open after this pass:** the package remains unpublished on
+PyPI (a publication decision, not a code gap); the Rust crate's audit
+still judges v0.3 ledgers against the assumed budget (Python-first,
+documented); no CI yet runs the install route in a clean venv — the
+cold agent suggested one, and it is the right next hardening step.

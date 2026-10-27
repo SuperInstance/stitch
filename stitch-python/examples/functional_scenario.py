@@ -219,9 +219,12 @@ def cmd_derive(outdir: str) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 4 and sys.argv[1] == "make":
+    if len(sys.argv) >= 2 and sys.argv[1] in ("-h", "--help", "help"):
+        print(__doc__)
+    elif len(sys.argv) == 4 and sys.argv[1] == "make":
         cmd_make(sys.argv[2], sys.argv[3])
     elif len(sys.argv) == 3 and sys.argv[1] == "derive":
         cmd_derive(sys.argv[2])
     else:
-        raise SystemExit(__doc__)
+        print(__doc__, file=sys.stderr)
+        raise SystemExit(2)

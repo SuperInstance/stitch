@@ -49,7 +49,10 @@ class Tenant:
     """
     A tenant is the unit of accountability. Each tenant has a γ+η≤log₂3 budget per tick.
 
-    In v0.1, identity is a string. In v0.2, it will be an Ed25519 public key.
+    Identity is a string. Since v0.3 it may optionally be an Ed25519
+    public key in 64-char hex (see stitch.crypto.Key.identity), so that
+    signed attestations can be tied to the tenant that made them; key
+    to identity binding is still established out of band.
 
     Attributes:
         identity: A unique string identifying this tenant.

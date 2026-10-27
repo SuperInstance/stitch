@@ -48,7 +48,7 @@ The conservation law `γ + η ≤ log₂3` is the Shannon information content of
 | Stitch | What it does |
 |---|---|
 | `attest(tenant, ledger, cell, claim)` | Sign a claim about a cell |
-| `delegate(tenant, ledger, cell, to, scope)` | Assign partial agency |
+| `delegate(tenant, ledger, cell, to_identity, scope)` | Assign partial agency |
 | `contest(tenant, ledger, cell, reason)` | Challenge a cell's validity |
 | `merger(tenant, ledger, cell_a, cell_b, kind, payload)` | Combine two cells into a new one |
 | `revoke(tenant, ledger, cell, reason)` | Undo a cell's authority (append-only, no deletion) |
@@ -140,13 +140,28 @@ The hash chain makes the ledger **tamper-evident**: changing any entry invalidat
 
 ## Installation
 
-```bash
-# Option 1: copy-paste (it's pure Python, zero deps)
-cp -r stitch-python/stitch /your/project/
+Requires Python ≥ 3.9. The library itself has zero dependencies.
 
-# Option 2: pip install (when published)
-pip install stitch-substrate
+```bash
+# Option 1: pip install from a clone of this repo (works today)
+pip install ./stitch-python        # or: pip install -e ./stitch-python
+
+# Option 2: copy-paste (it's pure Python, zero deps) — then run your
+# code from inside that project, where the package sits next to it
+cp -r stitch-python/stitch /your/project/
 ```
+
+Not yet on PyPI (as of v0.3.0, 2026-10-27): `pip install stitch-substrate`
+will fail with "No matching distribution found" until it is published.
+Until then, use one of the routes above — or, for a quick script
+against a clone, `PYTHONPATH=/path/to/stitch-python python3 your_script.py`.
+
+Whichever route you pick, make `import stitch` true **before** copying
+any code block below, and beware one trap: if your working directory
+contains a folder literally named `stitch` (for example, the parent of
+this clone), a bare `import stitch` can silently bind to that folder
+instead of the library and then fail with
+`AttributeError: module 'stitch' has no attribute 'Tenant'`.
 
 ---
 
@@ -183,7 +198,22 @@ stitch.tick(alice, ledger)  # γ resets to 0
 
 # Verify the ledger's hash chain is intact
 assert ledger.verify()
+
+# Done writing? Close it (or use `with stitch.Ledger(...) as ledger:`).
+# Appends flush to disk per entry, so the file is auditable even before
+# close — but one writer per ledger file: two processes appending to
+# the same file can interleave and corrupt the chain.
+ledger.close()
 ```
+
+**The two budget knobs — set both.** The Quick start uses the default
+budget. To customise it: `Tenant(identity="alice", budget=3.0)` is what
+the conservation law **enforces** at write time, and
+`stitch.declare_budget(alice, ledger)` **records** that budget in the
+ledger so an auditor sees it without trusting your code. Declaring a
+budget does *not* raise the budget your writes are enforced against —
+the most common wrong mental model new users form (found by cold test,
+2026-10-27).
 
 ---
 
@@ -222,16 +252,43 @@ See [SPEC.md](./SPEC.md) for the canonical wire format, opcode definitions, hash
 ## Demo
 
 ```bash
-python stitch-python/examples/minimal_agent.py
+python3 stitch-python/examples/minimal_agent.py
 ```
 
 Runs a minimal "agent" (no LLM required — uses a fake deterministic responder) that binds a cell, predicts an outcome, observes it, records the surprise, demonstrates the conservation law rejecting a write, ticks to reset, and attests to the result.
 
+## Tutorials — learn it by doing real work
+
+[**tutorials/**](./tutorials/) contains three complete, runnable
+templates for the jobs people actually use stitch for — an accountable
+journal for a single agent, an agent-to-agent handoff with a derived
+receipt, and corroborated observers that sync by file copy. Each runs
+end-to-end offline and ends with an "adapt it" section and honest
+limits. If you are an agent arriving cold, start there (or with
+[AGENTS.md](./AGENTS.md)).
+
+## Examples
+
+| Example | What it shows | Run it |
+|---|---|---|
+| `stitch-python/examples/minimal_agent.py` | The demo above | `python3 stitch-python/examples/minimal_agent.py` |
+| `stitch-python/examples/cross_instance.py` | One ledger audited by another party; forged (law-violating) and tampered (chain-broken) variants | `python3 stitch-python/examples/cross_instance.py make --identity you --dir /tmp/x` then `… audit --dir /tmp/x` (`--help` lists `forge`/`tamper`) |
+| `stitch-python/examples/cross_instance2.py` | Two sovereign selves + a witness deriving agreed state | `python3 stitch-python/examples/cross_instance2.py --help` for the make/derive flow |
+| `stitch-python/examples/functional_scenario.py` | The full v0.3 scenario: bilateral mint/refusal, N-party ring, anchor, budgets, signed attestations, and the documented impostor limitation | `python3 stitch-python/examples/functional_scenario.py --help` |
+| `tests/cross_lang.py` | Python↔Rust byte-exactness vectors | `python3 tests/cross_lang.py` from the repo root |
+
 ## Tests
 
+The library needs no test dependencies; the *suite* needs pytest:
+
 ```bash
-cd stitch-python && python -m pytest tests/ -v
+python3 -m venv .venv && .venv/bin/pip install pytest
+# either invocation works:
+.venv/bin/python -m pytest stitch-python/tests/      # from the repo root
+cd stitch-python && ../.venv/bin/python -m pytest tests/ -v
 ```
+
+Rust (optional; the Python library does not need it): `cd stitch-rs && cargo test` — 6 tests.
 
 Verifies the conservation law, the hash chain, byte-exactness, all 11 stitches, the v0.2 agreement layer (audit, minting, refusals, the head-hash anchor), and the v0.3 additions (non-ASCII pin, position-aware budget declarations, N-party agreement, Ed25519 + RFC 8032 vectors, opt-in signed attestations).
 

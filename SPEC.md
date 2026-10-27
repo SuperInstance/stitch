@@ -144,7 +144,7 @@ The library's `Surprise` class is the seam — implementations should be swappab
 
 ## Tenant identity
 
-Tenant identity is a string (any UTF-8). An earlier roadmap draft planned Ed25519 public-key identities and real `ATTEST` signatures for v0.2; that is deferred. Ed25519 is not in the Python standard library, and stitch's zero-dependency rule outranks it — a hand-rolled signature implementation would be worse than an honest deferral. Consequence, stated plainly: in v0.2 an identity is a *claim*, not a proof. The agreement rules in the next section prove that two records agree; they do not prove who wrote a record. The `ATTEST` stitch's `sig` field remains a SHA-256 hash placeholder.
+Tenant identity is a string (any UTF-8). Consequence, stated plainly: an identity is a *claim*, not a proof. The agreement rules in the next section prove that two records agree; they do not prove who wrote a record. Since v0.3 two narrow, opt-in strengthenings exist (see "Ed25519 signatures (v0.3)"): an identity *may* be an Ed25519 public key in 64-char hex, and `attest` writes a real signature when passed a secret key — the `sig` field is otherwise the SHA-256 hash placeholder it has been since v0.1, and key-to-identity binding remains out of band.
 
 ---
 
@@ -221,7 +221,7 @@ An exchange between two tenants is booked **by each side into its own ledger**, 
 - `xchg` — an exchange identifier, chosen by the participants (any string; unique per pair by convention, like a reference number on a cheque).
 - `side` — `"send"` in the sender's ledger, `"receive"` in the receiver's.
 - `peer` — the counterpart's identity: the receiver in the sender's booking, the sender in the receiver's.
-- `ph` — the payload hash: SHA-256 (hex) of the canonical JSON of the exchanged payload, `json.dumps(payload, sort_keys=True, separators=(",", ":"))`. The payload itself is NOT recorded — the hash is the commitment both sides must match. Booking costs no γ.
+- `ph` — the payload hash: SHA-256 (hex) of the canonical JSON of the exchanged payload, `json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)` — the `ensure_ascii=False` is load-bearing for any non-ASCII payload (the v0.3 encoding pin, see "Byte-exactness"); without it this formula silently diverges from the library and from every other implementation. The payload itself is NOT recorded — the hash is the commitment both sides must match. Booking costs no γ.
 
 The Python helpers are `book_send` / `book_receive`; the descriptor format above is the normative part, not the helpers.
 
@@ -264,6 +264,10 @@ An Agreement pins both ledgers at agreement time: head hash and entry count per 
 
 Residual limit, honestly: the anchor is only as trustworthy as the pin. A holder must keep the Agreement record itself intact; an attacker who can replace both the ledger AND your stored pin defeats it, as with any hash anchor not witnessed elsewhere. FNV-1a is a tamper-evident canary, not a cryptographic hash — the pin detects truncation and rewriting relative to what you kept, not a forgery crafted against FNV-1a's weaknesses by someone who also controls the pin.
 
+### The verdict objects, in one place
+
+`Agreement` (from `agree`) carries: `agreed` (bool), `reason` (a lowercase reason string), `xchg`, `sender`, `receiver`, `payload_hash` (set only when minted), `head_a` / `entries_a` and `head_b` / `entries_b` (the pins, for `verify_anchor`), and `detail` (human-readable specifics). `AgreementN` mirrors it with `parties` (list of tenant identities that booked) and `heads` / `entries_list` (parallel to the input paths) in place of the `_a`/`_b` fields. `AuditVerdict` (from `audit_ledger`) carries: `chain_ok`, `chain_broken_at`, `law_ok`, `law_excess`, `entries`, `head_hash`, `budget` (the fallback budget used), `budgets` (declared per-tenant budgets), `attest_verified`, `attest_unsigned`, `attest_failures`, and the properties `ok` (chain + law) and `signatures_ok` (no failures and no unsigned attestations among keyed tenants — a separate judgement from `ok`).
+
 ### What agreement does NOT prove
 
 Agreement proves the two *records* agree — that both sides booked the same exchange over the same payload hash, in ledgers that pass audit. It does not prove a ledger copy is authentic (identity is a string claim in v0.2; see Tenant identity), that the payload ever moved, or that the payload hash corresponds to any particular real-world thing. Those are higher layers' problems, deliberately.
@@ -275,6 +279,8 @@ Agreement proves the two *records* agree — that both sides booked the same exc
 v0.2's audit had to assume each tenant's budget (default log₂3) because budgets were configured in-process, not recorded in the ledger. v0.3 closes that gap.
 
 A tenant records their per-tick budget C with the `declare_budget(tenant, ledger, budget=None)` helper. This is **not a new stitch** — it's a `bind` with `kind = "tenant"` and `payload = {"budget": <float>}`. The 11-stitch count is unchanged.
+
+**Two knobs, do not confuse them** (the most important paragraph in this section, added after a cold test formed the wrong model here): `declare_budget` only *records* the budget for auditors — it does not change what the stitch layer enforces at write time. Write-time enforcement reads the `Tenant` object: `Tenant(identity=…, budget=C)`. To run with a custom budget, set **both**, to the same C: the constructor so your writes are held to it, the declaration so the choice is auditable from the ledger alone.
 
 ### Wire format
 
@@ -299,9 +305,11 @@ ledger = stitch.Ledger(path="./alice.jsonl")
 stitch.declare_budget(alice, ledger, budget=3.0)
 
 # Now the audit will use 3.0 instead of the default log₂3
+ledger.close()  # appends flush per entry; close when done writing
 verdict = stitch.audit_ledger("./alice.jsonl")
 assert verdict.budgets == {"alice": 3.0}
 ```
+(For write-time enforcement of that same 3.0 in this process, the tenant would be constructed as `Tenant(identity="alice", budget=3.0)` — see "Two knobs" above.)
 
 ---
 
@@ -320,7 +328,7 @@ The `AgreementN` dataclass mirrors the bilateral `Agreement` but with `heads: li
 
 ### Refusal reasons
 
-The same reason codes as bilateral `agree` apply: `NO_SEND`, `MISSING_MIRROR`, `PAYLOAD_MISMATCH`, `PEER_MISMATCH`, `CHAIN_BROKEN`, `LAW_VIOLATED`. No new reason codes were added — the mirror rule generalises cleanly.
+The same reason codes as bilateral `agree` apply. Those are exported as constants (`stitch.NO_SEND`, `stitch.MISSING_MIRROR`, `stitch.PAYLOAD_MISMATCH`, `stitch.PEER_MISMATCH`, `stitch.CHAIN_BROKEN`, `stitch.LAW_VIOLATED`), and the `verdict.reason` values they hold are the **lowercase strings** (`"no_send"`, `"missing_mirror"`, `"payload_mismatch"`, …) — compare against the constant or the lowercase string, never the uppercase name (a cold-test finding: code written as `v.reason == "PAYLOAD_MISMATCH"` from an earlier printing of this list would never be true). No new reason codes were added — the mirror rule generalises cleanly.
 
 ### Backward compatibility
 
@@ -342,7 +350,8 @@ Located at `stitch-python/stitch/crypto/`. **Opt-in** — nothing imports it at 
 from stitch.crypto import Key, sign, verify
 
 key = Key.generate()           # new random Ed25519 keypair
-sig = key.sign(message)        # 64-byte signature
+sig = key.sign(message)        # 64-byte signature — `message` MUST be bytes;
+                               # a str raises TypeError (encode it first)
 key.verify(message, sig)       # True/False
 
 # Or as bare functions:
@@ -369,7 +378,7 @@ alice = stitch.Tenant(identity=key.identity)  # 64-char hex public key
 
 Two narrow hooks, both default-off and byte-identical when unused:
 
-- `attest(tenant, ledger, claim, cell="", secret_key=None)` — with a 32-byte secret key, the entry's `sig` field is a real Ed25519 signature (128 lowercase hex chars) over `"<tenant>:<cell>:<claim>"`. Without a key, `sig` is the v0.2 SHA-256 placeholder, unchanged.
+- `attest(tenant, ledger, cell, claim, secret_key=None)` — **cell before claim**, both required (an earlier printing of this bullet had the two swapped and crashed anyone who followed it positionally; corrected 2026-10-27 after a cold test). With a 32-byte secret key, the entry's `sig` field is a real Ed25519 signature (128 lowercase hex chars) over `"<tenant>:<cell>:<claim>"`. Without a key, `sig` is the v0.2 SHA-256 placeholder, unchanged.
 - `audit_ledger(path, budget=..., attest_keys=None)` — `attest_keys` maps tenant identity → public key (32 raw bytes or 64-char hex). For each keyed tenant, every ATTEST entry is checked: a real signature that verifies counts in `attest_verified`; a placeholder where a key was supplied counts in `attest_unsigned`; a malformed or non-verifying signature counts in `attest_failures`. The verdict property `signatures_ok` is True exactly when there are no failures and no unsigned attestations among keyed tenants. `AuditVerdict.ok` keeps its v0.2 meaning (chain + conservation law); callers wanting authenticity require `verdict.signatures_ok` as well. Only ATTEST entries can be signed — agreement bookings are not signed in v0.3.
 
 ### Verification status
