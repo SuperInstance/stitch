@@ -96,6 +96,83 @@ Rust: `cargo test` 6/6 on this VM, crate byte-identical to v0.2 apart
 from the version bump — the v0.3 features are Python-first and the docs
 say so.
 
+### Functional test — does it do what it is *for*? (2026-10-27)
+
+The 150 tests above prove the code passes its own suite. Casey asked
+the separate question: does stitch, used the way it is meant to be
+used, actually do the job? A fresh scenario script — written for this
+test, not part of the shipped suite — was run for real:
+`stitch-python/examples/functional_scenario.py` (in this repo).
+
+**Process.** Three physical selves, three machines: `proart`
+(ProArt WSL, run live in tmux session `stitch`, window `func`, at
+Casey's desk), `thor` (Jetson AGX Thor) and `vm` (this VM). Each self
+ran `make <itself>` alone — no other machine contacted, no coordinator,
+no shared clock — writing only its own ledger (proart 8 entries, thor
+8, vm 6), including a non-ASCII payload (`Sitka — 世界`). The three
+ledger files were then exchanged by plain scp (sha256 identical at
+every hop: proart `9ed39332…`, thor `2461bd2a…`, vm `88881aa7…`) and
+each machine independently ran `derive` over the same bundle. The
+derive report contains no timestamps, paths or head hashes, so the
+three reports must be byte-identical if independent derivation really
+agrees — and they were: all three files md5
+`f75ffde7c3f0b3a73a2f9ed16a7436fe`, diff-clean.
+
+**What the scenario checked, and what happened:**
+
+- **Sovereign audit:** each genuine ledger audits chain OK + law OK
+  on every machine.
+- **Mint only on agreement:** `x-agree` (proart books SEND, thor books
+  the mirror RECEIVE, same payload — non-ASCII included) **mints**,
+  payload hash `01514383…`; `x-dispute` (receiver booked rev 4 against
+  the sender's rev 3) **refuses** with `payload_mismatch`. Nothing
+  partially minted.
+- **N-party:** the proart→thor→vm→proart ring **mints** under
+  `agree_n` (parties `[proart, thor, vm]`, ph `528b57d6…`).
+- **Truncation:** the agreement-time anchor reports the genuine
+  ledger `anchored` and a one-line-shorter copy `truncated`.
+- **Two failure modes, two different checks:** a forged ledger
+  (valid chain, γ=2.5 in one tick) passes the chain and fails the
+  law; a tampered copy of proart's ledger (one character changed)
+  fails the chain at entry 1 and passes the law. `verify()` alone
+  would have waved the forged one through — the audit is the judge,
+  as documented.
+- **Conservation at write time:** a first 1-bit `effect` commits; a
+  second 1-bit `effect` in the same tick is rejected, appends
+  **nothing** (entries 2 → 2), and does not mutate the cell.
+- **Budgets, position-aware:** the retroactive-declaration attack
+  (spend γ=2.0, *then* declare 3.0) still audits law-violated; the
+  same spend with the declaration first audits clean.
+- **Signed attest, opt-in:** proart's ATTEST, signed with a fixed
+  *published test key*, verifies under the right public key
+  (verified=1, signatures_ok) and fails under a wrong key
+  (verified=0, 1 failure); with no keys supplied the audit does no
+  signature work at all, exactly as in v0.2.
+
+**Two behaviours worth naming because they surprise:**
+`agreed_state` (bilateral fold of proart+thor) also mints `ring-1` —
+correctly, because the ring's proart→thor leg *is* a true bilateral
+mirror pair. And `agreed_state_n` refuses `x-agree`/`x-dispute` with
+`missing_mirror` — also correctly: an exchange one of the N parties
+never booked is not N-party shared state, however clean the bilateral
+pair is.
+
+**The one want it does NOT meet, probed on purpose:** a fresh ledger
+that merely *claims* the identity `thor` and mirrors the `x-agree`
+booking **mints against proart's genuine ledger**. Bookings are
+unsigned and identity is a string claim, so agreement proves two
+*records* agree, not that a copy is authentic — the documented
+key↔identity gap, now demonstrated inside a functional scenario
+rather than only stated. Signed attestations narrow this for ATTEST
+entries only; closing it for bookings is future work, not a v0.3
+claim.
+
+Verdict: for the job it is sold for — sovereign, asynchronous,
+accountable records that mint shared state only where they agree —
+**yes, it does it, on real machines, with identical results derived
+independently.** For authenticated shared state, not yet, and this
+record says so in the same breath.
+
 ### Cross-instance exercises (v0.3 code, four selves)
 
 Both exercises re-run with each self on its own machine, ledgers
