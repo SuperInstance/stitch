@@ -39,6 +39,8 @@ from .stitches import (
     merger,
     revoke,
     withdraw,
+    declare_budget,
+    TENANT_KIND,
 )
 from .agreement import (
     EXCHANGE_KIND,
@@ -51,6 +53,7 @@ from .agreement import (
     LAW_VIOLATED,
     AuditVerdict,
     Agreement,
+    AgreementN,
     AnchorVerdict,
     payload_hash,
     book_send,
@@ -59,9 +62,11 @@ from .agreement import (
     agree,
     agreed_state,
     verify_anchor,
+    agree_n,
+    agreed_state_n,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __author__ = "SuperInstance"
 __license__ = "MIT"
 
@@ -96,6 +101,9 @@ __all__ = [
     "merger",
     "revoke",
     "withdraw",
+    # Tenant declaration helpers (v0.3 — not new stitches; helpers that use BIND)
+    "declare_budget",
+    "TENANT_KIND",
     # Agreement (v0.2)
     "EXCHANGE_KIND",
     "AGREED",
@@ -107,6 +115,7 @@ __all__ = [
     "LAW_VIOLATED",
     "AuditVerdict",
     "Agreement",
+    "AgreementN",
     "AnchorVerdict",
     "payload_hash",
     "book_send",
@@ -115,4 +124,7 @@ __all__ = [
     "agree",
     "agreed_state",
     "verify_anchor",
+    # N-party agreement (v0.3 — closes the "bilateral only" gap)
+    "agree_n",
+    "agreed_state_n",
 ]

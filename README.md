@@ -106,7 +106,7 @@ minted, refused = stitch.agreed_state("alice.jsonl", "bob.jsonl")
 
 The rules are strict, and every refusal is distinct: no send booked (`no_send`), the mirror never booked (`missing_mirror`), the receive names different parties (`peer_mismatch`), the two sides recorded different payloads under one id (`payload_mismatch`), or either ledger fails audit (`chain_broken`, `law_violated`). Nothing ever partially mints.
 
-The Agreement also pins both ledgers' head hashes. If a ledger's tail is later truncated, `stitch.verify_anchor(path, verdict.head_a, verdict.entries_a)` reports `truncated` — closing the v0.1 blind spot where a shortened ledger still verified clean. Agreement proves the two *records* agree; it does not prove a copy is authentic (identities are string claims until signatures land). Full semantics: [SPEC.md](./SPEC.md), "Agreement (v0.2)".
+The Agreement also pins both ledgers' head hashes. If a ledger's tail is later truncated, `stitch.verify_anchor(path, verdict.head_a, verdict.entries_a)` reports `truncated` — closing the v0.1 blind spot where a shortened ledger still verified clean. Agreement proves the two *records* agree; it does not prove a copy is authentic. Identities are still string claims — v0.3 adds opt-in Ed25519-signed attestations and keyed audit verification (see Status), but key-to-identity binding remains out of band. Full semantics: [SPEC.md](./SPEC.md), "Agreement (v0.2)".
 
 And the foreign-ledger audit is available on its own:
 
@@ -233,7 +233,7 @@ Runs a minimal "agent" (no LLM required — uses a fake deterministic responder)
 cd stitch-python && python -m pytest tests/ -v
 ```
 
-Verifies the conservation law, the hash chain, byte-exactness, all 11 stitches, and the v0.2 agreement layer (audit, minting, refusals, the head-hash anchor).
+Verifies the conservation law, the hash chain, byte-exactness, all 11 stitches, the v0.2 agreement layer (audit, minting, refusals, the head-hash anchor), and the v0.3 additions (non-ASCII pin, position-aware budget declarations, N-party agreement, Ed25519 + RFC 8032 vectors, opt-in signed attestations).
 
 ## License
 
@@ -241,12 +241,23 @@ MIT — see [LICENSE](./LICENSE).
 
 ## Status
 
-v0.2.0 — the agreement layer. The Python reference implementation is complete (54 tests): the 11 stitches plus foreign-ledger audit, bilateral minting with distinct refusal verdicts, and the head-hash anchor. The Rust crate implements the ledger, the hash chain, `Tenant`, the `bind` stitch, and (new in v0.2) the audit; minting is Python-first and the remaining stitches are not yet implemented there. TypeScript and C99 are on the roadmap (v0.3, v0.4).
+v0.3.0 — adopted from the Z.ai (GLM) v0.3 draft after an independent assessment, with fixes (see [Provenance](#provenance)). The Python reference implementation passes **150 tests** (up from 54 in v0.2). The four rounds:
 
-Known limitations, unchanged in kind from v0.1: byte-exactness between the Python and Rust ledgers is verified for ASCII content (the encoding pin is still owed — see SPEC.md); agreement proves records agree, not that a ledger copy is authentic. See [VERIFICATION.md](./VERIFICATION.md) for the full test matrix and exactly what has and has not been verified.
+- **R1 — Non-ASCII encoding pin.** All `json.dumps` calls now use `ensure_ascii=False`, matching Rust's `serde_json` raw UTF-8 output. Closes the v0.2 known limitation where non-ASCII content hashed differently across implementations. 41 new byte-exactness tests with Latin-1, Chinese, Japanese, Korean, Arabic, Cyrillic, emoji, and math symbols. One hard break, honestly recorded: ledgers and payload hashes created under v0.2 with non-ASCII content do not verify under the pin (they never matched the Rust side either); ASCII is fully bidirectional.
+- **R2 — Budget declarations.** New `declare_budget()` helper writes a `BIND` with `kind="tenant"` recording the per-tenant budget in the ledger. The audit reads declared budgets per-tenant instead of assuming one global budget. Backward-compatible: v0.2 ledgers without declarations still audit clean. **Adoption patch:** declarations are position-aware — a declaration covers entries from its own position onward, never earlier ones. The draft's audit extracted budgets in a pre-pass, so a declaration appended after an overspend retroactively excused it; a regression test now pins the refusal. 13 tests.
+- **R3 — N-party agreement.** New `agree_n()` and `agreed_state_n()` functions returning `AgreementN`. The bilateral mirror rule generalises cleanly: every SEND booked in any ledger must have a mirror RECEIVE in some OTHER ledger, all bookings agree on the payload hash, and every ledger has at least one booking. A "party" is any ledger carrying at least one booking for the exchange; a receive-only ledger counts as a party, and minting does not require each party to send. For N=2 it reduces exactly to `agree`. 9 new tests including a 4-party ring.
+- **R4 — Pure-Python Ed25519, wired in opt-in.** New `stitch.crypto` subpackage implementing RFC 8032 Ed25519 in pure Python (stdlib-only via `hashlib.sha512`). On adoption it was also wired in — narrowly, and off by default: `attest` writes a real Ed25519 signature when passed a secret key, and `audit_ledger` verifies such signatures when passed the tenants' public keys (`attest_keys`). Without keys on either side, entries and verdicts are byte-identical to v0.2. What this does **not** close: key-to-identity binding is still out of band, and only ATTEST entries can be signed — so copy authenticity is enforced exactly where a writer opted in and an auditor supplied keys, nowhere else. 22 module tests + 6 RFC-vector tests + 5 wiring tests.
+
+The Rust crate implements the ledger, the hash chain, `Tenant`, the `bind` stitch, and the v0.2 audit; agreement/minting and the v0.3 features are Python-first. TypeScript and C99 are on the roadmap (v0.4).
+
+**Ed25519 verification, settled on adoption.** The draft shipped the module with round-trip tests only and honestly said cross-library interop was unproven. During adoption the RFC 8032 §7.1 vectors (TEST 1, TEST 2) were pinned as tests — derived keys and signatures match the RFC byte-for-byte — and the implementation was cross-checked against OpenSSL in both directions. The module is conformant for the cases the vectors cover; its verify does not screen for small-order points (recorded in VERIFICATION.md).
+
+See [VERIFICATION.md](./VERIFICATION.md) for the full test matrix and exactly what has and has not been verified.
 
 The design is settled. The implementation will mature.
 
 ## Provenance
 
 The v0.1 draft was written by Casey's Z.ai assistant (GLM) and sent to Muse by email on 2026-10-26, with the instruction to try to make it into something legitimate. Muse verified the claims, fixed what was broken, ran the cross-machine test matrix, and prepared this repository for publication. Verification results — including the failures found on the way — are recorded in [VERIFICATION.md](./VERIFICATION.md), not smoothed over.
+
+v0.2 (the agreement layer) was designed and built by Muse on the v0.1 base, and verified on five machines the same day. The v0.3 draft was written by Casey's Z.ai assistant (GLM), building on the published v0.2 and aiming at its four named gaps; Muse assessed it independently (the assessment is summarised in VERIFICATION.md) and adopted it with fixes: the position-aware budget patch, the opt-in attest/audit signature wiring, the RFC 8032 vectors pinned as tests, corrected doc claims, and the version bump completed. The Rust crate remains as of v0.2; the v0.3 features are Python-first.

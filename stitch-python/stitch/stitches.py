@@ -41,7 +41,10 @@ def _cell_id(tenant: str, kind: str, payload: dict, parent_hash: Optional[str], 
     Not cryptographically unique (16 hex = 64 bits), but collision-resistant in practice
     for a single ledger. A real deployment would use a longer hash or UUID.
     """
-    payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    # ensure_ascii=False: non-ASCII payload content goes into the cell ID
+    # material as raw UTF-8 bytes. Matches Rust's serde_json output. v0.3 pin.
+    payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                              ensure_ascii=False)
     # SPEC.md: the parent component is (parent_hash or "") — an absent parent
     # serialises as the empty string, never as Python's "None".
     material = f"{tenant}:{kind}:{payload_json}:{parent_hash or ''}:{ts}"
@@ -76,8 +79,9 @@ def bind(
     if not isinstance(payload, dict):
         raise BindError(f"payload must be a dict, got {type(payload).__name__}")
     try:
-        # Verify payload is JSON-serializable
-        json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        # Verify payload is JSON-serializable (raw UTF-8 form, v0.3 pin)
+        json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                   ensure_ascii=False)
     except (TypeError, ValueError) as e:
         raise BindError(f"payload is not JSON-serializable: {e}") from e
 
@@ -251,24 +255,51 @@ def attest(
     ledger: Ledger,
     cell: Cell,
     claim: str,
+    secret_key: Optional[bytes] = None,
 ) -> str:
     """
     ATTEST: sign a claim about a cell.
 
-    v0.1: signature is a SHA-256 hash placeholder. v0.2 will use real Ed25519.
+    Default (no key): the v0.1 placeholder — the first 16 hex chars of
+    SHA-256("tenant:cell:claim"). A tamper-evident tag, not a
+    cryptographic signature.
+
+    Opt-in (v0.3): pass `secret_key`, a 32-byte Ed25519 secret key
+    (e.g. `Key.generate().secret_bytes` from `stitch.crypto`), and the
+    entry's `sig` is a real RFC 8032 Ed25519 signature (128 hex chars)
+    over the same material string "tenant:cell:claim". An auditor who
+    knows the tenant's public key verifies it via
+    `audit_ledger(path, attest_keys={tenant_identity: public_key})`.
+    The default wire format is unchanged when no key is passed; the
+    crypto import is lazy, so the unsigned path never touches
+    `stitch.crypto`.
 
     Args:
         tenant: The attesting tenant.
         ledger: The ledger to record the attestation in.
         cell: The cell the claim is about.
         claim: A string describing the claim (e.g., "completed_turn", "verified_output").
+        secret_key: Optional 32-byte Ed25519 secret key. If given, the
+            attestation is really signed; if omitted, the placeholder
+            tag is written.
 
     Returns:
-        The signature string (16 hex chars in v0.1).
+        The signature string: 16 hex chars by default, 128 hex chars
+        when `secret_key` is given.
+
+    Raises:
+        ValueError: if `secret_key` is given but is not 32 bytes.
     """
-    # Placeholder — real impl uses Ed25519
     sig_material = f"{tenant.identity}:{cell.id}:{claim}"
-    sig = hashlib.sha256(sig_material.encode("utf-8")).hexdigest()[:16]
+    if secret_key is None:
+        sig = hashlib.sha256(sig_material.encode("utf-8")).hexdigest()[:16]
+    else:
+        if len(secret_key) != 32:
+            raise ValueError(
+                f"secret_key must be a 32-byte Ed25519 secret key, "
+                f"got {len(secret_key)} bytes")
+        from .crypto.ed25519 import sign as _ed25519_sign
+        sig = _ed25519_sign(secret_key, sig_material.encode("utf-8")).hex()
     ledger.append({
         "t": _now_ns(),
         "ns": tenant.identity,
@@ -411,3 +442,51 @@ def withdraw(
         "amount": amount,
         "g": tenant.gamma,
     })
+
+
+# ============================================================================
+# Tenant budget declaration (v0.3 — closes the "audit must assume" gap)
+# ============================================================================
+
+#: The BIND kind used for tenant budget declarations.
+TENANT_KIND = "tenant"
+
+
+def declare_budget(
+    tenant: Tenant,
+    ledger: Ledger,
+    budget: Optional[float] = None,
+) -> Cell:
+    """
+    Declare a tenant's per-tick conservation budget in the ledger itself.
+
+    v0.2's audit had to assume each tenant's budget (default log₂3) because
+    budgets were configured in-process, not recorded. v0.3 closes that gap:
+    a tenant records their budget with this helper, and the audit reads it
+    back instead of assuming.
+
+    This is NOT a new stitch. It's a `bind` with `kind="tenant"` and a
+    payload of `{"budget": <float>}`. The 11-stitch count is unchanged.
+
+    Args:
+        tenant: The tenant declaring their budget.
+        ledger: The ledger to record the declaration in.
+        budget: The per-tick budget C. If None, uses the tenant's currently
+                configured budget (tenant.budget) — useful for recording the
+                default at the start of a ledger.
+
+    The first declaration of a tenant's budget in a ledger is
+    authoritative FROM THE POSITION WHERE IT STANDS: the audit applies
+    it to the declaration entry itself and every later entry, and judges
+    earlier entries against the fallback budget (the audit's `budget`
+    parameter, default log₂3). A declaration cannot reach back over
+    surprise that was spent before it — an overspend followed by a
+    larger declaration later in the ledger still audits as a violation.
+    Subsequent declarations are recorded but ignored by the audit. To
+    change a budget, start a new ledger.
+
+    Returns the bound Cell (a kind="tenant" cell with the budget descriptor).
+    """
+    if budget is None:
+        budget = tenant.budget
+    return bind(tenant, ledger, kind=TENANT_KIND, payload={"budget": budget})

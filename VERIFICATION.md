@@ -4,6 +4,135 @@ Everything below was run for real on 2026-10-26 by Muse, on the copies
 in this repo. The original draft's own claims were not trusted; where
 they were wrong, that's recorded here and in the fixes list.
 
+## v0.3 — adoption of the GLM draft, with fixes (2026-10-26)
+
+The v0.3 draft was written by Casey's Z.ai assistant (GLM) on the
+published v0.2, targeting the four known limitations named there (R1
+non-ASCII pin, R2 budget declarations, R3 N-party agreement, R4 Ed25519
+signatures). Muse assessed it independently before adopting anything:
+the draft's suite passed as shipped (137/137 on this VM, counts exact),
+its hand-rolled Ed25519 was proven RFC 8032-faithful against OpenSSL
+before any claim was repeated, and three deficits were demonstrated
+with running code (below). The draft is adopted with fixes; this section
+records what ran, what was patched, and what is still open. GLM's own
+v0.3 verification notes were not carried over: its R4 paragraph claimed
+the copy-authenticity gap "closed" while nothing in the draft imported
+the crypto module, and it cited a cross-check we could not find
+evidence for. Where this record and the draft's disagree, this record
+is the one we stand behind.
+
+### What was wrong in the draft, and the fixes
+
+1. **Crypto was an island.** `stitch/crypto` was implemented and tested
+   but nothing imported it: `attest` still wrote the SHA-256 placeholder
+   and the audit verified no signatures. **Fix (opt-in wiring):**
+   `attest(..., secret_key=None)` writes a real Ed25519 signature over
+   `"<tenant>:<cell>:<claim>"` when given a 32-byte key (default stays
+   the placeholder, byte-identical); `audit_ledger(...,
+   attest_keys=None)` verifies ATTEST signatures for keyed tenants and
+   reports `attest_verified` / `attest_unsigned` / `attest_failures`
+   plus a `signatures_ok` property. `AuditVerdict.ok` keeps its v0.2
+   meaning (chain + law). Five wiring tests pin the behaviour,
+   including tamper-after-signing (chain broken, failure recorded) and
+   keyless audits being completely unchanged.
+2. **Budget audit was position-blind.** Demonstrated against the
+   draft: spend γ=2.0 in one tick (over the 1.5850 default), then
+   `declare_budget(3.0)` afterwards — the draft's audit extracted
+   declarations in a pre-pass and returned `law_ok` with max excess
+   0.0. **Fix:** the audit judges each entry during its single replay
+   pass against the budget in force at that entry's position; a first
+   declaration takes effect at its own position and covers entries from
+   there on. The attack now audits `law_ok=False` with max excess
+   0.415, and a declaration made before a legitimate spend still covers
+   it. Two regression tests pin both directions. `AuditVerdict.budgets`
+   still reports the declared claims.
+3. **Docstring claimed tests that didn't exist.** `ed25519.py` claimed
+   RFC 8032 vectors were validated in its test file; the file had none.
+   **Fix:** the claim was corrected, and the real RFC 8032 §7.1 vectors
+   (TEST 1 and TEST 2, values read from the RFC text during adoption)
+   were added as `tests/test_rfc8032_vectors.py` — public-key
+   derivation and signatures match the RFC byte-for-byte, 6 tests.
+   (During adoption, a widely-copied transcription of the TEST 2
+   signature failed against this implementation while TEST 1 passed
+   byte-for-byte; the RFC's own text was fetched and the pinned value
+   corrected to the RFC's bytes — the tests now pin the RFC, not the
+   transcription.)
+4. **Version strings left at 0.2.0** in `pyproject.toml` and
+   `Cargo.toml`. Bumped to 0.3.0 in both (`stitch/__init__.py` already
+   carried 0.3.0; `Cargo.lock` updated by cargo).
+
+### Test matrix — Python suite, 150 tests
+
+150 = the draft's 137 (core 34, byte-exact 5, agreement 15, non-ASCII
+41, budget 11, N-party 9, Ed25519 22) + 13 added on adoption (RFC 8032
+vectors 6, position-aware budget 2, attest wiring 5). Suite runtime
+~12–21 s per surface (the pure-Python Ed25519 dominates: ~270 ms per
+sign/verify on this VM).
+
+| Surface | Result |
+|---|---|
+| This VM (x86_64) | 150 passed; cross_lang PASSED; minimal_agent rc 0 |
+| Oracle cloud VM (aarch64, Python 3.14.4) | 150 passed; cross_lang PASSED; minimal_agent rc 0 |
+| Jetson Orin Nano (aarch64) | 150 passed; cross_lang PASSED; minimal_agent rc 0 |
+| Jetson AGX Thor (aarch64, niced under another agent's load) | 150 passed; cross_lang PASSED; minimal_agent rc 0 |
+| ProArt WSL (x86_64) | **PENDING — box off.** Both doors checked three times on 2026-10-26 evening: the Oracle tunnel slot refuses and the Thor LAN-hub listener for the ProArt is absent, i.e. WSL is not running. The leg runs unchanged against this commit when the box is next up; until then this row claims nothing. |
+
+Rust: `cargo test` 6/6 on this VM, crate byte-identical to v0.2 apart
+from the version bump — the v0.3 features are Python-first and the docs
+say so.
+
+### Cross-instance exercises (v0.3 code, four selves)
+
+Both exercises re-run with each self on its own machine, ledgers
+exchanged as files, exactly as in v0.1/v0.2. Because the ProArt was
+off, the v0.2 exercise's pairs were oracle↔orin and vm↔thor (the v0.2
+run paired proart↔thor); the VM was a full self this time rather than
+the witness.
+
+- **v0.1 exercise:** bundle = 4 genuine ledgers + forged + tampered.
+  All four machines' audits agree verdict-for-verdict (auditor name in
+  the header aside): forged → chain OK, **law VIOLATED** (γ=2.5 >
+  1.5850); tampered → **chain BROKEN**, law OK; all genuine OK.
+- **v0.2 exercise:** both pairs **MINT** x-agree (identical payload
+  hash `e435cb0a72de` on both pairs); both pairs **REFUSE** x-dispute
+  (`payload_mismatch`); every cross-pair combination refuses with the
+  correct reason (`peer_mismatch`, `missing_mirror`, `no_send`). All
+  four machines' derive outputs are byte-identical (md5
+  `4d399e146040344c952259510880c441`).
+
+### Compatibility with v0.2, measured
+
+- ASCII artefacts are fully bidirectional: a v0.2-written ASCII ledger
+  audits clean under v0.3, vice versa, and cross-version ASCII
+  exchanges still mint.
+- Non-ASCII is a hard break in both directions, as documented in the
+  assessment: v0.3 rejects v0.2-era non-ASCII ledgers (chain broken at
+  the first non-ASCII entry) and v0.2 rejects v0.3's; ASCII payload
+  hashes are identical across versions (`bfa9434c…`), non-ASCII differ
+  (v0.2 `3cd43ebe…` vs v0.3 `e5950e9a…`). The v0.2 artefacts were
+  already nonconformant against the Rust implementation; the pin makes
+  Python match Rust, not the other way around.
+
+### Still open after v0.3 (stated as plainly as the draft's gaps were)
+
+- **Key↔identity binding is out of band.** Signatures prove a key
+  signed an attestation; nothing yet proves the key belongs to the
+  tenant identity it claims. Copy authenticity is enforced only where
+  writers opt in and auditors supply keys — narrowed, not closed.
+- Only ATTEST entries can be signed; agreement bookings are unsigned.
+- `verify` does not screen for small-order A/R points. The cofactored
+  check still rejects signatures failing the verification equation,
+  and all RFC/OpenSSL probes passed, but a strict verifier would add
+  the screening.
+- The Ed25519 module is slow (~270 ms/op on a small VM). Fine at
+  ledger scale; not a bulk-signing tool.
+- Budgets remain per-tenant and self-declared: a tenant can declare a
+  huge budget. Declarations make budgets *auditable*, not *honest* —
+  the same shape as surprise inputs (see v0.1 limitations, unchanged).
+- The Rust audit does not yet know about declarations, N-party
+  agreement, or signatures; a v0.2-semantics audit of a v0.3 ledger
+  with a declared budget judges against the assumed budget.
+
 ## v0.2 — the agreement layer (2026-10-26)
 
 v0.1's verification ended with a named gap: stitch verified but did not

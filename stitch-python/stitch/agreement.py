@@ -36,12 +36,19 @@ How an exchange works (Casey's double-entry formulation):
 
 Honest limits (also in SPEC.md):
 
-  - Agreement proves the two RECORDS agree. It does not prove a copy of
-    someone's ledger is authentic — identity in v0.2 is still a string,
-    and signatures are future work. Hold copies you trust.
-  - The audit assumes a per-tenant budget (default log2(3)), because
-    ledgers do not record configured budgets. The assumption is carried
-    in every verdict.
+  - Agreement proves the two RECORDS agree. It does not by itself prove
+    a copy of someone's ledger is authentic — tenant identity is a
+    string, and keys (where used) are bound to identities out of band.
+    v0.3 adds an opt-in signed path: `attest` can carry a real Ed25519
+    signature when the writer passes a secret key, and this audit
+    verifies such signatures when the caller supplies the tenants'
+    public keys (`attest_keys`). Entries written without a key keep the
+    v0.1 placeholder tag and are counted as unsigned, not verified.
+  - The audit uses each tenant's in-ledger budget declaration when one
+    is in force (declarations are position-aware: a declaration covers
+    entries from its own position onward, never earlier ones) and
+    otherwise assumes the `budget` parameter (default log2(3)). The
+    assumption is carried in every verdict.
   - FNV-1a is a tamper-evident canary, not a cryptographic hash. The
     anchor catches truncation/rewrites relative to a pin you kept; it
     is not a defence against an attacker who can also replace your pin.
@@ -56,7 +63,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Union
 
 from .core import LOG2_3, FNV_OFFSET, Cell, Ledger, Tenant
-from .stitches import bind
+from .stitches import bind, TENANT_KIND
 
 PathLike = Union[str, "os.PathLike[str]"]
 
@@ -88,7 +95,12 @@ def payload_hash(payload) -> str:
     `(",", ":")` separators. Both sides hash the payload they believe was
     exchanged; the hashes meeting is what `agree` checks.
     """
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    # ensure_ascii=False: non-ASCII payload content is hashed over its
+    # raw UTF-8 bytes, not the \uXXXX-escaped form. This is the v0.3 pin
+    # (see SPEC.md "Byte-exactness"). Both sides of an exchange must hash
+    # the same bytes for agree() to mint.
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                           ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -142,7 +154,22 @@ class AuditVerdict:
     `chain_broken_at` is k. `head_hash` is the hash of the last entry of
     the valid prefix (None if no entry verified). `tenant` is the single
     tenant identity found in the valid prefix, or None if there were
-    several or none. `budget` records the budget the law replay assumed.
+    several or none.
+
+    `budget` records the fallback budget the law replay used for tenants
+    without an in-ledger declaration (default log₂3). `budgets` is the
+    per-tenant map of declared budgets (empty if no declarations found);
+    a declaration is in force only from its own position onward (see
+    `_audit`), so `budgets` is the set of claims, not proof that a given
+    budget covered any particular entry.
+
+    The `attest_*` fields are populated only when the audit is given
+    public keys (`attest_keys`): `attest_verified` counts ATTEST entries
+    whose Ed25519 signature verified, `attest_unsigned` counts ATTEST
+    entries by keyed tenants that carry no Ed25519 signature (e.g. the
+    v0.1 placeholder), and `attest_failures` lists signatures that did
+    not verify. Without keys all three stay at their defaults and `ok`
+    is exactly the v0.2 meaning.
     """
     path: str
     tenant: Optional[str]
@@ -154,15 +181,55 @@ class AuditVerdict:
     law_violations: list = field(default_factory=list)
     head_hash: Optional[str] = None
     budget: float = LOG2_3
+    budgets: dict = field(default_factory=dict)
+    attest_verified: int = 0
+    attest_unsigned: int = 0
+    attest_failures: list = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         """True when both the chain and the conservation law verify."""
         return self.chain_ok and self.law_ok
 
+    @property
+    def signatures_ok(self) -> bool:
+        """
+        True when no supplied-key ATTEST signature failed verification.
 
-def _audit(path: PathLike, budget: float):
-    """Audit `path`; return (AuditVerdict, [valid entries as dicts])."""
+        Vacuously True when the audit was not given keys — check
+        `attest_verified` if you need to know any were actually checked.
+        """
+        return not self.attest_failures
+
+
+def _normalise_pubkey(identity: str, key) -> bytes:
+    """An attest_keys value as 32 raw bytes (bytes or 64-char hex str)."""
+    if isinstance(key, str):
+        try:
+            key = bytes.fromhex(key)
+        except ValueError:
+            raise ValueError(
+                f"attest_keys[{identity!r}] is not valid hex") from None
+    if not isinstance(key, (bytes, bytearray)) or len(key) != 32:
+        raise ValueError(
+            f"attest_keys[{identity!r}] must be a 32-byte Ed25519 public "
+            f"key (bytes or 64-char hex), got {key!r}")
+    return bytes(key)
+
+
+def _audit(path: PathLike, budget: float, attest_keys=None):
+    """
+    Audit `path`; return (AuditVerdict, [valid entries as dicts]).
+
+    `attest_keys`: optional {tenant identity: Ed25519 public key} map.
+    When given, ATTEST entries by those tenants are signature-checked
+    (see AuditVerdict). When None (the default), no signature work is
+    done at all and the verdict's attest_* fields stay at defaults.
+    """
+    if attest_keys is not None:
+        from .crypto.ed25519 import verify as _ed25519_verify
+        attest_keys = {ns: _normalise_pubkey(ns, k)
+                       for ns, k in attest_keys.items()}
     path_str = os.fspath(path)
     raw_lines = []
     with open(path_str, "r", encoding="utf-8") as f:
@@ -185,7 +252,8 @@ def _audit(path: PathLike, budget: float):
         if h_str is None:
             chain_broken_at = i
             break
-        content = json.dumps(entry, separators=(",", ":"), sort_keys=True)
+        content = json.dumps(entry, separators=(",", ":"), sort_keys=True,
+                              ensure_ascii=False)
         expected = Ledger._fnv1a(content, last)
         if f"{expected:016x}" != h_str:
             chain_broken_at = i
@@ -197,11 +265,41 @@ def _audit(path: PathLike, budget: float):
     # Conservation-law replay over the valid prefix: γ accumulates each
     # EFFECT's recorded s per tenant, resets on TICK, and every entry's
     # recorded g must equal the replayed running sum and stay in budget.
+    #
+    # v0.3: per-tenant budgets may be declared in-ledger with a BIND of
+    # kind="tenant" and payload={"budget": <float>} (see declare_budget).
+    # First declaration wins; subsequent declarations are recorded but
+    # ignored. Tenants without an in-ledger declaration fall back to the
+    # `budget` parameter (default log₂3) — preserves backward
+    # compatibility with v0.2 ledgers.
+    #
+    # Declarations are POSITION-AWARE (patch applied on adoption of
+    # v0.3 — the draft extracted budgets in a pre-pass over the whole
+    # valid prefix, so a declaration appended after an overspend
+    # retroactively excused it): a declaration takes effect at its own
+    # position and covers only entries from there on. Surprise spent
+    # before a declaration stands is judged against the budget in force
+    # at the position where it was spent.
+    declared_budgets: dict = {}
+    active_budgets: dict = {}
+
     gamma: dict = {}
     violations: list = []
     excess = 0.0
+    attest_verified = 0
+    attest_unsigned = 0
+    attest_failures: list = []
     for i, e in enumerate(entries):
         ns = e.get("ns", "?")
+        # A first budget declaration takes effect at its own position.
+        if (e.get("op") == "BIND" and e.get("kind") == TENANT_KIND
+                and isinstance(e.get("payload"), dict)
+                and ns not in declared_budgets):
+            b = e["payload"].get("budget")
+            if isinstance(b, (int, float)) and b > 0:
+                declared_budgets[ns] = float(b)
+                active_budgets[ns] = float(b)
+        tenant_budget = active_budgets.get(ns, budget)
         g = gamma.get(ns, 0.0)
         if e.get("op") == "EFFECT":
             g += float(e.get("s", 0.0))
@@ -214,12 +312,38 @@ def _audit(path: PathLike, budget: float):
                 f"entry {i}: recorded g={recorded} != replayed "
                 f"gamma={g:.4f} (tenant {ns}, op {e.get('op')})"
             )
-        if g > budget + _EPS:
-            excess = max(excess, g - budget)
+        if g > tenant_budget + _EPS:
+            excess = max(excess, g - tenant_budget)
             violations.append(
-                f"entry {i}: gamma={g:.4f} exceeds budget {budget:.4f} "
-                f"by {g - budget:.4f} (tenant {ns}, op {e.get('op')})"
+                f"entry {i}: gamma={g:.4f} exceeds budget "
+                f"{tenant_budget:.4f} by {g - tenant_budget:.4f} "
+                f"(tenant {ns}, op {e.get('op')})"
             )
+        # Opt-in ATTEST signature verification: only for tenants whose
+        # public key the caller supplied, and only now that the entry is
+        # known to sit inside the valid (chain-verified) prefix.
+        if (attest_keys is not None and e.get("op") == "ATTEST"
+                and ns in attest_keys):
+            sig = e.get("sig")
+            sig_bytes = None
+            if isinstance(sig, str) and len(sig) == 128:
+                try:
+                    sig_bytes = bytes.fromhex(sig)
+                except ValueError:
+                    sig_bytes = None
+            if sig_bytes is None:
+                attest_unsigned += 1
+            else:
+                material = f"{ns}:{e.get('cell')}:{e.get('claim')}"
+                if _ed25519_verify(attest_keys[ns],
+                                   material.encode("utf-8"), sig_bytes):
+                    attest_verified += 1
+                else:
+                    attest_failures.append(
+                        f"entry {i}: ATTEST signature does not verify "
+                        f"for tenant {ns} (cell {e.get('cell')}, "
+                        f"claim {e.get('claim')!r})"
+                    )
 
     tenants = {e.get("ns") for e in entries}
     verdict = AuditVerdict(
@@ -233,17 +357,28 @@ def _audit(path: PathLike, budget: float):
         law_violations=violations,
         head_hash=head_hash,
         budget=budget,
+        budgets=declared_budgets,
+        attest_verified=attest_verified,
+        attest_unsigned=attest_unsigned,
+        attest_failures=attest_failures,
     )
     return verdict, entries
 
 
-def audit_ledger(path: PathLike, budget: float = LOG2_3) -> AuditVerdict:
+def audit_ledger(path: PathLike, budget: float = LOG2_3,
+                 attest_keys=None) -> AuditVerdict:
     """
     Audit a foreign ledger from a local copy: hash chain + conservation
     law, as one structured verdict. Reads only; never opens for append.
     Raises FileNotFoundError if the file does not exist.
+
+    `attest_keys` (optional): {tenant identity: Ed25519 public key as
+    bytes or 64-char hex}. When supplied, ATTEST entries written by
+    those tenants with a real signature (see `attest`) are verified and
+    the verdict reports `attest_verified` / `attest_unsigned` /
+    `attest_failures`. When omitted, no signature verification happens.
     """
-    verdict, _ = _audit(path, budget)
+    verdict, _ = _audit(path, budget, attest_keys)
     return verdict
 
 
@@ -460,3 +595,178 @@ def verify_anchor(path: PathLike, head_hash: Optional[str],
     status = "anchored" if pinned_entry_hash == head_hash else "rewritten"
     return AnchorVerdict(status, path_str, verdict.entries, entry_count,
                          current_head, head_hash)
+
+
+# ============================================================================
+# N-party agreement (v0.3 — closes the "bilateral only" gap)
+# ============================================================================
+
+@dataclass
+class AgreementN:
+    """
+    The verdict on one exchange across N ledger copies (N >= 2).
+
+    v0.2's `Agreement` is bilateral (two ledgers). v0.3 generalises to N
+    parties forming a closed cycle of mirror bookings: every SEND booked
+    in any ledger has a corresponding RECEIVE booked by the named peer in
+    some other ledger, all bookings agree on the payload hash, and every
+    ledger has at least one booking for the exchange.
+
+    For N=2 this reduces exactly to `agree` — a bilateral exchange is a
+    2-cycle. For N>2 a typical ring is: A books SEND to B and RECEIVE
+    from C; B books SEND to C and RECEIVE from A; C books SEND to A and
+    RECEIVE from B. The audit verifies each SEND has its mirror RECEIVE.
+
+    `heads` and `entries_list` are parallel arrays indexed the same as
+    the input `paths` — they pin each ledger's head hash and entry count
+    at agreement time, for later `verify_anchor` checks.
+
+    When `agreed` is False, `reason` is one of the module-level reason
+    codes (NO_SEND, MISSING_MIRROR, PAYLOAD_MISMATCH, PEER_MISMATCH,
+    CHAIN_BROKEN, LAW_VIOLATED) and `detail` says exactly what failed.
+    """
+    xchg: str
+    agreed: bool
+    reason: str
+    detail: str
+    parties: list = field(default_factory=list)
+    payload_hash: Optional[str] = None
+    heads: list = field(default_factory=list)
+    entries_list: list = field(default_factory=list)
+    paths: list = field(default_factory=list)
+
+
+def agree_n(paths, xchg: str, budget: float = LOG2_3) -> AgreementN:
+    """
+    Decide whether exchange `xchg` is shared state across N ledgers.
+
+    The rule is the v0.2 bilateral rule generalised: every SEND booked
+    in any ledger must have a mirror RECEIVE booked by the named peer in
+    some OTHER ledger, with the same payload hash and counterpart
+    identities naming each other. RECEIVE bookings without a SEND
+    counterpart are observations, not commitments — they don't trigger
+    a refusal (this matches v0.2 semantics).
+
+    All N ledgers are audited first; any chain break or law violation
+    on any side refuses everything. The exchange mints only if:
+
+      1. Every ledger has at least one booking for `xchg`.
+      2. All bookings across all ledgers agree on the same payload hash.
+      3. Every SEND has a mirror RECEIVE in some other ledger.
+
+    For N=2 this is exactly `agree` — a 2-cycle. For N>2 the typical
+    ring pattern is each party booking a SEND to their successor and a
+    RECEIVE from their predecessor.
+    """
+    path_strs = [os.fspath(p) for p in paths]
+
+    # Audit all N ledgers first
+    audits: list = []
+    for p in path_strs:
+        v, entries = _audit(p, budget)
+        audits.append((v, entries))
+
+    heads = [v.head_hash for v, _ in audits]
+    entries_list = [v.entries for v, _ in audits]
+    base = dict(heads=heads, entries_list=entries_list, paths=path_strs)
+
+    def refuse(reason: str, detail: str) -> AgreementN:
+        return AgreementN(xchg=xchg, agreed=False, reason=reason,
+                           detail=detail, **base)
+
+    # Any chain break or law violation refuses everything
+    for i, (v, _) in enumerate(audits):
+        if not v.chain_ok:
+            return refuse(CHAIN_BROKEN,
+                          f"{path_strs[i]}: hash chain broken at entry {v.chain_broken_at}")
+        if not v.law_ok:
+            return refuse(LAW_VIOLATED,
+                          f"{path_strs[i]}: {v.law_violations[0]}")
+
+    # Collect all bookings for xchg across all ledgers
+    # Each: (ledger_idx, ns, descriptor)
+    all_bookings: list = []
+    for i, (_, entries) in enumerate(audits):
+        for e in entries:
+            if e.get("op") == "BIND" and e.get("kind") == EXCHANGE_KIND:
+                p = e.get("payload") or {}
+                if p.get("xchg") == xchg:
+                    all_bookings.append((i, e.get("ns"), p))
+
+    if not all_bookings:
+        return refuse(NO_SEND,
+                      f"no booking for exchange {xchg!r} in any of the {len(paths)} ledgers")
+
+    # Check every ledger has at least one booking
+    ledgers_with_bookings = {b[0] for b in all_bookings}
+    if len(ledgers_with_bookings) < len(path_strs):
+        missing = [path_strs[i] for i in range(len(path_strs))
+                   if i not in ledgers_with_bookings]
+        return refuse(MISSING_MIRROR,
+                      f"{len(missing)} ledger(s) have no booking for {xchg!r}: {missing}")
+
+    # Check all bookings agree on the same payload hash
+    phs = {b[2].get("ph") for b in all_bookings}
+    if len(phs) > 1:
+        return refuse(PAYLOAD_MISMATCH,
+                      f"multiple payload hashes for {xchg!r}: {phs}")
+    ph = phs.pop()
+
+    # For every SEND booking, look for a mirror RECEIVE in some OTHER ledger.
+    # A SEND by ns to peer with ph needs a RECEIVE by peer from ns with ph,
+    # in some ledger other than the SEND's ledger.
+    for ledger_idx, ns, p in all_bookings:
+        if p.get("side") != "send":
+            continue  # RECEIVEs are observations, not commitments — skip
+        peer = p.get("peer")
+        found_mirror = False
+        for other_idx, other_ns, other_p in all_bookings:
+            if other_idx == ledger_idx:
+                continue  # mirror must be in a different ledger
+            if (other_ns == peer
+                and other_p.get("side") == "receive"
+                    and other_p.get("peer") == ns
+                    and other_p.get("ph") == ph):
+                found_mirror = True
+                break
+        if not found_mirror:
+            return refuse(MISSING_MIRROR,
+                          f"SEND by {ns} to {peer} (ph={ph[:8]}) has no "
+                          f"mirror RECEIVE in any other ledger")
+
+    # All checks passed — mint
+    parties = sorted({b[1] for b in all_bookings})
+    return AgreementN(
+        xchg=xchg, agreed=True, reason=AGREED,
+        detail=f"{len(parties)} parties agreed on payload hash {ph}",
+        parties=parties, payload_hash=ph, **base,
+    )
+
+
+def agreed_state_n(paths, budget: float = LOG2_3):
+    """
+    The derived fold of N ledgers: (agreed, refused) — an AgreementN for
+    every exchange id booked in any of the N ledgers, partitioned by
+    outcome, each list sorted by exchange id. The agreed list is the
+    N-party shared state; it exists only here, as a fold of the records.
+    """
+    path_strs = [os.fspath(p) for p in paths]
+
+    # Audit all N ledgers once
+    all_entries: list = []
+    for p in path_strs:
+        _, entries = _audit(p, budget)
+        all_entries.append(entries)
+
+    # Collect all exchange ids across all ledgers
+    ids = set()
+    for entries in all_entries:
+        for e in entries:
+            if e.get("op") == "BIND" and e.get("kind") == EXCHANGE_KIND:
+                ids.add((e.get("payload") or {}).get("xchg"))
+
+    agreed, refused = [], []
+    for xchg in sorted(ids):
+        verdict = agree_n(path_strs, xchg, budget=budget)
+        (agreed if verdict.agreed else refused).append(verdict)
+    return agreed, refused

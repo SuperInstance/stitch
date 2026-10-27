@@ -301,15 +301,18 @@ class Ledger:
         """
         if "h" in entry:
             raise LedgerError("Entry must not have an `h` field — append computes it")
-        # Serialize without the hash, sorted keys, no whitespace
-        line_without_hash = json.dumps(entry, separators=(",", ":"), sort_keys=True)
+        # Serialize without the hash, sorted keys, no whitespace.
+        # ensure_ascii=False pins the encoding: non-ASCII content is emitted
+        # as raw UTF-8 bytes, matching serde_json on the Rust side. This is
+        # the v0.3 byte-exactness pin (see SPEC.md "Byte-exactness").
+        line_without_hash = json.dumps(entry, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
         # Compute hash seeded with previous hash
         h = self._fnv1a(line_without_hash, self._last_hash)
         h_str = f"{h:016x}"
         # Add hash and re-serialize (sorted keys still)
         entry_with_hash = dict(entry)
         entry_with_hash["h"] = h_str
-        line_with_hash = json.dumps(entry_with_hash, separators=(",", ":"), sort_keys=True)
+        line_with_hash = json.dumps(entry_with_hash, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
         # Write
         self._f.write(line_with_hash + "\n")
         self._f.flush()
@@ -348,7 +351,8 @@ class Ledger:
                     if h_str is None:
                         return False
                     line_without_hash = json.dumps(
-                        entry, separators=(",", ":"), sort_keys=True
+                        entry, separators=(",", ":"), sort_keys=True,
+                        ensure_ascii=False,
                     )
                     expected = self._fnv1a(line_without_hash, last)
                     if f"{expected:016x}" != h_str:
