@@ -144,3 +144,75 @@ lines with `t1-proart` and the hash intact. State 6: all six cards
 vivid, the winning 8 highlighted, trick-2 and final banners solid and
 fully legible, caption clean. JS re-checked with `node --check`; the
 file still has zero `src=` attributes and no external resources.
+
+## Rework pass — zero-shot reader panel framing (2026-10-27, on a5b7d6d)
+
+Three cold readers (zero-shot agents given only the page) were asked
+what it demonstrates. Verdict: the Stitch War replay **is** the wow —
+"no central driver after the deal", "derived from the four ledger
+files alone", the relay diagram + Step button were what they
+remembered — but the framing around it lost people. Their findings,
+and the change each one drove (framing and plain language only; every
+fact, number, hash, and score is byte-identical to before):
+
+- **(a) Hero led with jargon** (γ+η ≤ log₂3, "substrate primitive").
+  → New hero: *"Three AIs. Three computers. One card game. No
+  server."* with a plain sub (notebooks, no referee, the game exists
+  only where the notebooks agree). Status chips untouched. The old
+  technical paragraph was **demoted, not deleted**: it now sits in a
+  small "The technical version" block after the game section, wording
+  verified character-identical to the old hero lede.
+- **(b) The game's rules and stakes were never explained.** → A
+  "The game, in 20 seconds" box directly above the replay table: the
+  deal, the sealed home notebook, nobody running the game, the
+  witness check at the end.
+- **(g) A reader couldn't tell the replay is a replay of a real
+  recorded game.** → The rules box closes with an explicit line:
+  nothing is simulated; every card and hash is copied from the actual
+  ledgers. (The section head already said "a real game, really
+  played"; it evidently wasn't landing.)
+- **(c) The cheat/tamper evidence was buried in a footnote.** → A
+  distinct red-bordered "🧪 The cheat test" strip now sits in the
+  game section after the table: in rehearsal a move file was doctored
+  in transit (7 → 8); at the derive the seal didn't match the booking
+  hash — refused, `payload_mismatch`, scored nothing. The old
+  footnote under the table was shortened to the booking point alone
+  to avoid duplication.
+- **(d) The mint diagram's LEDGER A / B was abstract.** → The boxes
+  are now "A'S NOTEBOOK — on A's machine · sovereign" (and B's), the
+  section intro says "two notebooks", and `agree()` is glossed in
+  the diagram as "a small check". The five refusal chips and their
+  glosses are unchanged.
+- **(f) The v0.4 cards were detail-before-meaning.** → Each card now
+  opens with one plain "Why it matters:" line (floats: two honest
+  computers can write the same number differently; Ed25519: a third
+  of a second per check made audits mostly waiting; signed bookings:
+  a stranger's notebook claiming your name could mint in v0.3 and
+  can't under enforcement). No new claims — each line restates what
+  its card already proved.
+- **(e) The timeline was dry.** → v0.1, v0.2, v0.3 each gained a
+  short why-it-mattered clause ("The bet: eleven operations is
+  enough" / "two machines agreeing on a fact neither one stored" /
+  "more parties, signed claims — and a draft flaw caught by
+  independent reading, patched, not shipped"). Entries otherwise
+  unchanged; v0.4 untouched.
+
+**Verification:** headless Chromium (same shell as the fix pass):
+plain page at `--window-size=1280,6400` plus injected auto-click
+copies at 3 and 6 Steps, screenshots read directly. Hero, rules box,
+both trick states, cheat strip, captions (`t1-proart` /
+`05475e6665a7…` at 3; `t2-proart` / `f70d9f18a97a…` at 6), technical
+block, mint diagram (notebook labels fit their boxes; the four-line
+`agree()` gloss fits beat 3), all three takeaway lines, timeline
+clauses, and footer all render legibly with no layout breakage.
+Programmatic checks: the `PLAYS` script/data block is untouched in
+the diff; the technical paragraph compares equal to the old lede
+(tags stripped, whitespace normalised); all payload-hash prefixes
+and gate numbers still present; zero `src=` attributes; the single
+`https://` remains the footer repo anchor; `<!-- NEXT SECTION -->`
+marker intact. One capture note, same as the fix pass: in the
+stepped screenshots the route diagram can show the previously active
+node mid-glow; `--dump-dom` on the 6-step copy confirms
+`node-proart` (not the dealer) carries `active` in the settled DOM —
+a screenshot-frame artifact of the pre-existing node transition, not
+a state error, and not code this pass touched.
