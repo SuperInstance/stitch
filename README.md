@@ -1,5 +1,6 @@
 # stitch
 
+**▶ Live showcase:** [superinstance.github.io/stitch](https://superinstance.github.io/stitch/) — the Stitch War replay, how a mint works, and the v0.4 record, on one page.
 A tiny, language-portable substrate primitive for accountable agent state.
 
 `stitch` is the smallest binding operation in a quilt. This library provides stitches: 11 operations on cells of agent state, each one append-only, conservation-law-enforced, and byte-exact across languages.
