@@ -1,0 +1,37 @@
+# CI for stitch: the Python suite, the Rust crate, and the
+# cross-language byte-exactness harness. Every command below is one
+# the maintainers run locally (see AGENTS.md "Run everything").
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the package (with test extras)
+        run: pip install "./stitch-python[test]"
+      - name: Smoke — the installed package imports and reports its version
+        run: python -c "import stitch; print(stitch.__version__)"
+      - name: Python test suite (from the repo root)
+        run: python -m pytest stitch-python/tests/ -q
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cargo tests (the Rust side asserts the cross-language vectors)
+        working-directory: stitch-rs
+        run: cargo test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cross-language harness (Python side)
+        run: python3 tests/cross_lang.py
