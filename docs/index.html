@@ -63,22 +63,22 @@
   .trick-label{font-family:var(--mono);font-size:.76rem;color:var(--faint);letter-spacing:.1em;text-transform:uppercase;width:74px;flex:0 0 auto}
   .slots{display:flex;gap:12px;flex-wrap:wrap}
   .slot{width:104px;height:136px;border-radius:12px;border:1.5px dashed #2c3852;background:rgba(255,255,255,.015);display:flex;align-items:center;justify-content:center;color:#3d4a66;font-family:var(--mono);font-size:.7rem;text-align:center;padding:6px}
-  .pcard{width:104px;height:136px;border-radius:12px;background:linear-gradient(160deg,#f4f1e8,#ddd6c2);color:#14161c;border:1.5px solid #b9b09a;box-shadow:0 10px 24px rgba(0,0,0,.45);padding:10px 11px;display:flex;flex-direction:column;animation:deal .38s ease}
-  @keyframes deal{from{opacity:0;transform:translateY(-14px) rotate(-2deg) scale(.94)}to{opacity:1;transform:none}}
+  .pcard{width:104px;height:136px;border-radius:12px;background:linear-gradient(160deg,#f7f3ea,#e3dbc6);color:#14161c;border:1.5px solid #a89e83;box-shadow:0 10px 24px rgba(0,0,0,.45);padding:10px 11px;display:flex;flex-direction:column;opacity:1}
   .pcard .rank{font-size:2rem;font-weight:800;line-height:1;letter-spacing:-.02em}
-  .pcard .suit{font-size:.72rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;opacity:.55}
+  .pcard .suit{font-size:.72rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;opacity:.75}
   .pcard .who{margin-top:auto}
   .pcard .who .pname{font-family:var(--mono);font-size:.8rem;font-weight:700}
-  .pcard .who .mach{font-size:.68rem;color:#5a5c66}
-  .pcard.winner{outline:3px solid var(--accent);outline-offset:2px}
-  .banner{display:none;border-radius:12px;padding:12px 18px;margin:0 0 14px;font-weight:650}
-  .banner.show{display:block;animation:deal .35s ease}
-  .banner.trick{background:rgba(126,224,163,.09);border:1px solid rgba(126,224,163,.4);color:#c9f2da}
-  .banner.final{background:rgba(108,184,255,.09);border:1px solid rgba(108,184,255,.45);color:#d3e8ff;font-size:1.02rem}
+  .pcard .who .mach{font-size:.68rem;color:#44464e}
+  .pcard.winner{outline:3px solid var(--accent);outline-offset:2px;box-shadow:0 0 0 5px rgba(126,224,163,.35),0 0 28px rgba(126,224,163,.55),0 10px 24px rgba(0,0,0,.45)}
+  .banner{display:none;border-radius:12px;padding:13px 18px;margin:0 0 14px;font-weight:650;opacity:1}
+  .banner.show{display:block}
+  .banner.trick{background:#173324;border:1.5px solid var(--accent);color:#eafff2}
+  .banner.final{background:#182a44;border:1.5px solid var(--accent2);color:#eef6ff;font-size:1.02rem}
   .banner .score{font-family:var(--mono);font-weight:700}
-  .caption{font-family:var(--mono);font-size:.84rem;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:12px 16px;color:var(--muted);min-height:52px;display:flex;align-items:center;margin:18px 0 16px;word-break:break-word}
+  .caption{font-family:var(--mono);font-size:.84rem;line-height:1.65;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:12px 16px;color:var(--muted);min-height:52px;margin:18px 0 16px;overflow-wrap:break-word}
   .caption b{color:var(--ink)}
   .caption .hash{color:var(--accent2)}
+  .caption .nw{white-space:nowrap}
   .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   button{font-family:var(--sans);font-size:.95rem;font-weight:650;border-radius:10px;padding:11px 22px;cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--ink);transition:all .15s ease}
   button:hover{border-color:var(--faint)}
@@ -464,7 +464,7 @@ function render(){
       ? "The bundle is copied to <b>" + PLAYS[shown].player + "</b>, whose agent is woken to play next."
       : "The bundle returns to <b>thor</b>, where the witness derive runs over the four ledgers.";
     caption.innerHTML = "Turn " + p.turn + " · trick " + p.trick + " — <b>" + p.player + "</b> books the play in its own ledger: " +
-      "xchg <b>" + p.xchg + "</b> · payload hash <span class=\"hash\">" + p.hash + "</span> · card <b>" + (p.card === 14 ? "Ace (14)" : p.card) + "</b>. " + next;
+      "xchg <code class=\"nw\">" + p.xchg + "</code> · payload hash <code class=\"nw hash\">" + p.hash + "</code> · card <b>" + (p.card === 14 ? "Ace (14)" : p.card) + "</b>. " + next;
   }
   progress.textContent = shown + " / 6 plays";
   btnStep.disabled = shown >= PLAYS.length;

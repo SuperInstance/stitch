@@ -106,3 +106,41 @@ baseline figure), the brief's wording wins.
 - The replay's card entrance animation is CSS-only and degrades to a
   static deal where animations are unsupported; the game state does not
   depend on it.
+
+## Fix pass — replay legibility (2026-10-27, after real-browser screenshots)
+
+The original build was validated without a browser (see Known limits,
+now discharged). Headless Chromium screenshots of the stepped states
+(3 and 6 auto-clicks of Step) showed three defects in the replay area;
+all three are fixed in `docs/index.html`, presentation only — no facts,
+numbers, play data, or section copy changed:
+
+1. **Played cards nearly invisible** — the `deal` entrance animation
+   (opacity 0 → 1) could be captured mid-fade, leaving dealt cards as
+   faint silhouettes. The animation is removed from cards and banners;
+   `.pcard` is pinned `opacity:1` on its solid cream face, the rank
+   suit line is darker (opacity .55 → .75), and the winner highlight is
+   now outline **plus** a green glow ring/shadow.
+2. **Winner/final banners near-invisible** — the translucent
+   `rgba(…, .09)` backgrounds are replaced with solid fills
+   (`#173324` trick, `#182a44` final), 1.5px solid accent borders, and
+   near-white text.
+3. **Caption garbled** — root cause was `.caption{display:flex}`: flex
+   layout turns each text run and inline element into a separate flex
+   item, which shrank and split words mid-word ("pro/art", "t1-proar/t")
+   and overlapped fragments around the hash. The caption is now a plain
+   block that wraps at word boundaries (`overflow-wrap:break-word`,
+   line-height 1.65), and the exchange id and payload hash are inline
+   `<code class="nw">` spans with `white-space:nowrap`, so they never
+   split.
+
+**Verification (same method that caught the defects):** headless
+Chromium screenshots of the plain page and of injected auto-click
+copies (3 and 6 Step clicks, `--virtual-time-budget=5000`,
+`--window-size=1280,3200`), read directly. State 0 is unchanged.
+State 3: cards 12 / 4 / A solid and fully legible, Ace outlined and
+glowing, trick-1 banner solid with crisp text, caption flows in clean
+lines with `t1-proart` and the hash intact. State 6: all six cards
+vivid, the winning 8 highlighted, trick-2 and final banners solid and
+fully legible, caption clean. JS re-checked with `node --check`; the
+file still has zero `src=` attributes and no external resources.
