@@ -732,3 +732,38 @@ library, vendored into the bundle by the copy-paste route; kit and
 final bundle retained in the fleet workspace.) A tampered move file
 in rehearsal refused `payload_mismatch` at the derive and scored
 nothing.
+
+## v0.4.1 — backend tightening (2026-10-27)
+
+**Numeric-policy enforcement.** SPEC v0.4 said non-finite floats MUST
+NOT be booked and the helpers SHOULD reject them; the library booked
+them anyway — spec/library drift, closed in this patch. `book_send` /
+`book_receive` now walk the payload first and raise `ValueError` on
+any non-finite float (top-level, nested in dicts, nested in lists),
+before any signing or writing. Verified by Muse independently of
+the lane's tests: three refused bookings against a live ledger left
+the file **byte-identical** (sha256 compared), and the full suite is
+**181 passed** (174 pre-existing, unmodified, + 7 enforcement tests).
+Readers are deliberately unpoliced — `payload_hash` still returns its
+v0.4 digest for a NaN payload; auditing foreign data must verdict,
+not crash. The asymmetry is pinned by a test and stated in SPEC.
+
+**CI.** `.github/workflows/ci.yml` (new): on push to main and on
+pull requests — a Python job (install `./stitch-python[test]`,
+version smoke, suite from repo root) and a Rust job (`cargo test`,
+then `tests/cross_lang.py`). Every command was run locally by the
+lane before being written into the workflow; the first GitHub run is
+checked as part of this release's verification.
+
+**Dist readiness.** `python -m build` produces
+`stitch_substrate-0.4.1.tar.gz` and `stitch_substrate-0.4.1-py3-none-any.whl`
+(rebuilt at the release version); the wheel installed into a clean
+venv smoked a book+agree exchange to MINTED. Nothing has been
+uploaded — PyPI publication awaits Casey's account step.
+
+**Recon (no change): `effect()` key-absent behaviour.** Nothing in
+the repo depends on it: all 35 in-repo call sites pass the key in
+both dicts, and no test pins the `v: null` outcome. Whether
+`effect()` should refuse a key absent from both dicts is a design
+decision, taken separately from this patch; the behaviour is
+unchanged in v0.4.1.

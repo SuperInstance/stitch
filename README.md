@@ -300,6 +300,8 @@ MIT — see [LICENSE](./LICENSE).
 
 ## Status
 
+v0.4.1 — the tightening patch: the booking helpers now enforce the SPEC numeric policy (non-finite floats refuse with `ValueError` before anything is written; readers unchanged), and the repo has CI (suite + install smoke + cargo + cross-language on every push). **181 tests.** Details in [VERIFICATION.md](./VERIFICATION.md).
+
 v0.4.0 — the R&D release. Three research tracks were run against v0.3 (byte-exactness fuzz, performance, signed bookings) and adopted on the strength of their measurements: **signed bookings** (opt-in `secret_key=` on bookings, `booking_keys=` enforcement in agreement, new refusals `unsigned_booking`/`bad_signature` — the impostor ledger now refuses when keys are enforced; keyless behaviour byte-identical to v0.3), a **~300x faster Ed25519** (same bytes, same API — the per-attestation audit cliff is gone), and a **numeric policy** for the float half of the byte-exactness contract (SPEC) with a precision-safe Rust audit. The Python reference implementation passes **174 tests**; the Rust crate passes 10. Full record: [VERIFICATION.md](./VERIFICATION.md).
 
 v0.3.0 — adopted from the Z.ai (GLM) v0.3 draft after an independent assessment, with fixes (see [Provenance](#provenance)). The Python reference implementation passes **150 tests** (up from 54 in v0.2). The four rounds:
