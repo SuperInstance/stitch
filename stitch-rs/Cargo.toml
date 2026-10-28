@@ -17,7 +17,14 @@ path = "src/lib.rs"
 # The library itself uses serde_json (wire format) and sha2 (cell IDs).
 # These are real dependencies — an earlier draft of this manifest listed
 # them as dev-dependencies only, which did not compile.
-serde_json = "1.0"
+#
+# arbitrary_precision is load-bearing for the audit/verify path (v0.4):
+# it makes a parsed Number keep its source text, so re-serializing a
+# canonical line is the identity on bytes. serde_json's default parser
+# is not correctly rounded (±1 ulp on ~18% of float texts) and
+# re-formats the 1e-9..1e-4 band, which false-broke verification of
+# Python-written lines. See SPEC.md "Numeric policy (v0.4)".
+serde_json = { version = "1.0", features = ["arbitrary_precision"] }
 sha2 = "0.10"
 
 [dev-dependencies]

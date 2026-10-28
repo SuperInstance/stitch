@@ -21,6 +21,12 @@
 //! re-serialisation matches Python byte-for-byte for ASCII content (see
 //! the non-ASCII limitation in SPEC.md).
 //!
+//! v0.4 makes the audit/verify path precision-safe (SPEC.md "Numeric
+//! policy (v0.4)"): the crate builds serde_json with the
+//! `arbitrary_precision` feature, so a parsed number keeps its source
+//! text and hash recomputation re-serializes exactly the bytes the
+//! writer emitted — never a re-formatting of parsed float values.
+//!
 //! The full Rust implementation is on the v0.2 roadmap. This skeleton proves
 //! the byte-exactness contract holds across languages.
 
@@ -253,6 +259,13 @@ impl Ledger {
                 Some(s) => s,
                 None => return false,
             };
+            // The recomputed hash must be over the writer's bytes. This
+            // requires serde_json's arbitrary_precision feature (a Cargo
+            // dependency of this crate): numbers keep their source text,
+            // so the re-serialization below is the identity on a
+            // canonical line. The default parser drifts floats ±1 ulp
+            // and would false-break honest chains. SPEC "Numeric policy
+            // (v0.4)".
             let line_without_hash = match serde_json::to_string(&entry) {
                 Ok(s) => s,
                 Err(_) => return false,
@@ -328,6 +341,8 @@ pub fn audit_ledger(path: impl AsRef<Path>, budget: f64) -> std::io::Result<Audi
                 break;
             }
         };
+        // Same constraint as Ledger::verify: hash recomputation is exact
+        // only because arbitrary_precision preserves number source text.
         let line_without_hash = match serde_json::to_string(&entry) {
             Ok(s) => s,
             Err(_) => {
@@ -632,6 +647,151 @@ mod tests {
         })).unwrap();
 
         assert!(ledger.verify());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ========================================================================
+    // Numeric policy (v0.4) — SPEC.md "Numeric policy (v0.4)". The audit/
+    // verify path must hash what the writer wrote, never a re-serialization
+    // of parsed float values: serde_json's default parser is not correctly
+    // rounded (±1 ulp on ~18% of float texts) and re-formats the 1e-9..1e-4
+    // band. These tests build Python-written canonical lines directly, not
+    // via this crate's own writer, so they pin the verify/audit path alone.
+    // ========================================================================
+
+    /// Rebuild a canonical ledger line exactly as the Python writer would:
+    /// FNV the h-less content, then insert `h` at its sorted position.
+    /// Every entry used here starts `{"g":` and all its other keys sort
+    /// after "h", so the field goes right after the first comma.
+    /// Returns the full line and its hash.
+    fn python_line(content_without_h: &str, seed: u64) -> (String, String) {
+        let h_str = format!("{:016x}", fnv1a_64(content_without_h, seed));
+        let at = content_without_h.find(',').unwrap() + 1;
+        let (head, tail) = content_without_h.split_at(at);
+        (format!("{head}\"h\":\"{h_str}\",{tail}"), h_str)
+    }
+
+    #[test]
+    fn test_number_text_round_trips_verbatim() {
+        // Precision-safety mechanism: with serde_json's
+        // arbitrary_precision feature a parsed number keeps its source
+        // text, so parse -> re-serialize is the identity on bytes. These
+        // are the canonical Python texts from the 2026-10-27 fuzz study;
+        // the default parser drifts on the 17-digit float, reformats the
+        // band floats, and degrades the out-of-range integer. Python's
+        // repr always writes the exponent sign (e+16, e-05), and signed
+        // exponents round-trip verbatim.
+        //
+        // Residual, outside the portable set: a bare positive exponent
+        // (1e5, 1E5, 1.7976931348623157e308) is normalized to e+5/e+308
+        // — a form Python cannot emit, so it cannot false-break a
+        // conformant ledger.
+        for text in [
+            "123456789.12345679",
+            "1e-05",
+            "1e-06",
+            "1.5e-07",
+            "0.000001",
+            "1e+16",
+            "-0.0",
+            "5e-324",
+            "1.7976931348623157e+308",
+            "0.1",
+            "18446744073709551616",
+            "9223372036854775807",
+            "-9223372036854775808",
+        ] {
+            let v: serde_json::Value = serde_json::from_str(text).unwrap();
+            assert_eq!(serde_json::to_string(&v).unwrap(), text,
+                "number text did not round-trip verbatim: {text}");
+        }
+    }
+
+    #[test]
+    fn test_verify_float_parse_drift_123456789_12345679() {
+        // The fuzz study's parse-drift case: serde_json's default parser
+        // lands 1 ulp away from the double Python means
+        // (123456789.1234568 vs ...679), so a re-serialization of the
+        // parsed value hashes different bytes and false-breaks the chain.
+        // The Python writer's line must verify as written.
+        let temp = std::env::temp_dir();
+        let path = temp.join(format!("stitch_rs_num_drift_{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let content = concat!(
+            "{\"g\":0.0,\"ns\":\"alice\",\"op\":\"BIND\",",
+            "\"payload\":{\"v\":123456789.12345679},\"t\":1}"
+        );
+        let (line, h) = python_line(content, FNV_OFFSET);
+        std::fs::write(&path, line + "\n").unwrap();
+
+        let ledger = Ledger::open(&path).unwrap();
+        assert!(ledger.verify(), "parse drift false-broke a Python-written line");
+        drop(ledger);
+        let v = audit_ledger(&path, LOG2_3).unwrap();
+        assert!(v.chain_ok);
+        assert_eq!(v.entries, 1);
+        assert_eq!(v.head_hash.as_deref(), Some(h.as_str()));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_verify_writer_band_float_1e_05() {
+        // The fuzz study's writer-band case: Python's canonical form
+        // prints 1e-05 where Ryu prints 0.00001 (same double, different
+        // bytes). Verifying a foreign ledger must hash what was written.
+        let temp = std::env::temp_dir();
+        let path = temp.join(format!("stitch_rs_num_band_{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let content = concat!(
+            "{\"g\":0.0,\"ns\":\"alice\",\"op\":\"BIND\",",
+            "\"payload\":{\"v\":1e-05},\"t\":1}"
+        );
+        let (line, h) = python_line(content, FNV_OFFSET);
+        std::fs::write(&path, line + "\n").unwrap();
+
+        let ledger = Ledger::open(&path).unwrap();
+        assert!(ledger.verify(), "band re-formatting false-broke a Python-written line");
+        drop(ledger);
+        let v = audit_ledger(&path, LOG2_3).unwrap();
+        assert!(v.chain_ok);
+        assert_eq!(v.entries, 1);
+        assert_eq!(v.head_hash.as_deref(), Some(h.as_str()));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_verify_big_integer_per_policy() {
+        // Policy: integers outside [-2^63, 2^64-1] MUST be carried as
+        // decimal strings (SPEC "Numeric policy (v0.4)"). Line 1 is the
+        // policy form. Line 2 is the number form a Python writer can emit
+        // today (2^64 = 18446744073709551616): the default parser degrades
+        // it to 1.8446744073709552e+19 and false-breaks the chain; with
+        // the number text preserved it verifies, matching Python's audit.
+        let temp = std::env::temp_dir();
+        let path = temp.join(format!("stitch_rs_num_bigint_{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let c1 = concat!(
+            "{\"g\":0.0,\"ns\":\"alice\",\"op\":\"BIND\",",
+            "\"payload\":{\"big\":\"18446744073709551616\"},\"t\":1}"
+        );
+        let (l1, h1) = python_line(c1, FNV_OFFSET);
+        let c2 = concat!(
+            "{\"g\":0.0,\"ns\":\"alice\",\"op\":\"BIND\",",
+            "\"payload\":{\"big\":18446744073709551616},\"t\":2}"
+        );
+        let (l2, h2) = python_line(c2, u64::from_str_radix(&h1, 16).unwrap());
+        std::fs::write(&path, format!("{l1}\n{l2}\n")).unwrap();
+
+        let ledger = Ledger::open(&path).unwrap();
+        assert!(ledger.verify());
+        drop(ledger);
+        let v = audit_ledger(&path, LOG2_3).unwrap();
+        assert!(v.chain_ok);
+        assert_eq!(v.entries, 2);
+        assert_eq!(v.head_hash.as_deref(), Some(h2.as_str()));
         let _ = std::fs::remove_file(&path);
     }
 }

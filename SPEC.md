@@ -204,6 +204,41 @@ The test suite (`tests/test_non_ascii.py`) verifies byte-exactness across runs w
 
 ---
 
+## Numeric policy (v0.4)
+
+The v0.3 encoding pin closed the string surface. A byte-exactness fuzz study (2026-10-27, 1,884 payloads: boundary numbers, 400 random f64 bit patterns, 300 random decimals, controls) found the numeric surface is **not** clean: there are payloads a Python writer can book whose hash an honest Rust implementation will not reproduce. Three independent mechanisms, all measured against the real serde_json 1.0.154 — the exact serializer/parser the shipped `stitch-rs` uses. This section is the pin. It changes no wire format for any currently-portable payload; it constrains writers and verifiers.
+
+### The auditor rule (normative)
+
+**Verification MUST hash the original line bytes — or a canonical form of the record that preserves number text verbatim — and MUST NOT hash a re-serialization of parsed float values.** Where re-serialization is unavoidable (to normalize key order, strip the `h` field, or canonicalize a foreign file), the parser MUST preserve number text verbatim or be correctly rounded. A parser that lands ±1 ulp away recomputes a different hash and false-breaks a chain both writers agree on.
+
+Concretely: serde_json's default parser is not correctly rounded. Parsing `123456789.12345679` yields the neighbouring double, printed `123456789.1234568` — so a verify/audit path built as parse → strip `h` → re-serialize → FNV rejects honest Python-written lines. 139 of 776 float texts (18%), including serde's own output fed back to itself, drift ±1 ulp; drift concentrates at 16–17 significant digits (134/139) but was observed down to 14, so no "keep it under N digits" rule makes the default parser safe. The required mechanism in Rust is serde_json's `arbitrary_precision` feature: numbers keep their source text through `Value`, so re-serialization of a canonical line is the identity on bytes, while `as_f64()` still returns a correctly-rounded value (conservation-law replay is unaffected). `stitch-rs` builds with the feature enabled (see `stitch-rs/Cargo.toml`); the tests in `stitch-rs/src/lib.rs` pin the round-trip, the `1e-05` band case, and the out-of-range integer. The rule covers the ledger's own `g`/`s` float fields, not just payload values.
+
+### Writer policy (normative)
+
+For payload commitments and ledger lines alike:
+
+- **Non-finite floats MUST NOT be booked.** `NaN`, `Infinity`, `-Infinity` are invalid JSON. Python's `json` emits them by default (`allow_nan`); booking helpers SHOULD reject them (`json.dumps(..., allow_nan=False)` semantics or an explicit check). A Rust writer cannot construct them at all — `Number::from_f64` returns `None`, and the `json!` macro silently yields `null`, which would collide with a genuine `null` payload booked from Python.
+- **Integers outside `[−2⁶³, 2⁶⁴−1]` MUST be carried as decimal strings.** Other implementations degrade them lossily: serde_json parses them as f64, so `18446744073709551616` (2⁶⁴) comes back `1.8446744073709552e+19`, with distinct large integers colliding. Python's arbitrary-precision ints do not cross the wire as exact JSON numbers; writers needing big integers encode them as strings.
+- **Writers SHOULD avoid floats in the measured divergence band in commitments** — scientific-notation values with single-digit exponents, empirically **1e-9 ≤ |x| < 1e-4** — preferring strings or scaled integers for small quantities (fees, probabilities, sensor noise). In this band Python prints `1e-05` where Rust's Ryu prints `0.00001`: same double, different bytes, different hash. This is a writer-vs-writer divergence no auditor rule can repair after the fact, because both writers are honest. The durable fix — one canonical float format that every implementation formats to — is deliberately not attempted in v0.4; avoiding the band is the interim rule.
+
+### Measured evidence
+
+Against the real serde_json 1.0.154 on the study corpus:
+
+| Class | Example | Python emits | Rust (serde_json) emits | Mechanism |
+|---|---|---|---|---|
+| floats, 1e-9 ≤ \|x\| < 1e-4 | `1e-05` | `1e-05` | `0.00001` | writer-vs-writer (23/779 float atoms; also `1e-06`→`1e-6`, `1.5e-07`→`1.5e-7`, `9.999e-05`→`0.00009999`) |
+| floats, 14–17 significant digits | `123456789.12345679` | `123456789.12345679` | parses to `123456789.1234568` | parser drift, ±1 ulp (139/776 texts, incl. serde's own output) |
+| integers outside `[−2⁶³, 2⁶⁴−1]` | `18446744073709551616` | full decimal digits | `1.8446744073709552e+19` | lossy f64 (also 2¹⁰⁰, 10¹⁰⁰, 2²⁵⁶) |
+| non-finite | `NaN`, `Infinity` | invalid-JSON tokens | parse error; unconstructible as `Number` | Python-bookable, Rust-impossible |
+
+Clean, for the record: all 260/260 string and key cases byte-identical (scripts, emoji/ZWJ, combining sequences, controls, U+2028/29, key ordering); integers inside `[−2⁶³, 2⁶⁴−1]` identical, boundaries included; bools, null, nesting, empty containers identical; all other floats identical (753/779 atoms, including −0.0, subnormals down to 5e-324, max double, 1e16). The v0.3 pin did its job; the hole was numeric, and every numeric hazard found is closable by this policy without touching the wire format for any currently-portable payload.
+
+The Python side of the pin is `stitch-python/tests/test_numeric_policy.py` — canonical float texts of the portable set, `payload_hash` stability vectors for the examples above, and the `allow_nan=False` rejection semantics. TypeScript remains unpinned (see Implementation status): `JSON.stringify` prints every integral float without `.0` and collapses `−0.0` to `0` (153 measured diffs) — do not claim TS conformance until a number pin lands.
+
+---
+
 ## Agreement (v0.2)
 
 v0.1 recorded and verified; it could not agree. This section is the agreement layer. It adds **no new stitch and no new entry fields** — agreement is built entirely from the existing wire format, which is why it can stay this small.
