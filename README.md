@@ -151,7 +151,7 @@ pip install ./stitch-python        # or: pip install -e ./stitch-python
 cp -r stitch-python/stitch /your/project/
 ```
 
-Not yet on PyPI (as of v0.3.0, 2026-10-27): `pip install stitch-substrate`
+Not yet on PyPI (as of v0.4.0, 2026-10-27): `pip install stitch-substrate`
 will fail with "No matching distribution found" until it is published.
 Until then, use one of the routes above — or, for a quick script
 against a clone, `PYTHONPATH=/path/to/stitch-python python3 your_script.py`.
@@ -289,7 +289,7 @@ python3 -m venv .venv && .venv/bin/pip install pytest
 cd stitch-python && ../.venv/bin/python -m pytest tests/ -v
 ```
 
-Rust (optional; the Python library does not need it): `cd stitch-rs && cargo test` — 6 tests.
+Rust (optional; the Python library does not need it): `cd stitch-rs && cargo test` — 10 tests.
 
 Verifies the conservation law, the hash chain, byte-exactness, all 11 stitches, the v0.2 agreement layer (audit, minting, refusals, the head-hash anchor), and the v0.3 additions (non-ASCII pin, position-aware budget declarations, N-party agreement, Ed25519 + RFC 8032 vectors, opt-in signed attestations).
 
@@ -298,6 +298,8 @@ Verifies the conservation law, the hash chain, byte-exactness, all 11 stitches, 
 MIT — see [LICENSE](./LICENSE).
 
 ## Status
+
+v0.4.0 — the R&D release. Three research tracks were run against v0.3 (byte-exactness fuzz, performance, signed bookings) and adopted on the strength of their measurements: **signed bookings** (opt-in `secret_key=` on bookings, `booking_keys=` enforcement in agreement, new refusals `unsigned_booking`/`bad_signature` — the impostor ledger now refuses when keys are enforced; keyless behaviour byte-identical to v0.3), a **~300x faster Ed25519** (same bytes, same API — the per-attestation audit cliff is gone), and a **numeric policy** for the float half of the byte-exactness contract (SPEC) with a precision-safe Rust audit. The Python reference implementation passes **174 tests**; the Rust crate passes 10. Full record: [VERIFICATION.md](./VERIFICATION.md).
 
 v0.3.0 — adopted from the Z.ai (GLM) v0.3 draft after an independent assessment, with fixes (see [Provenance](#provenance)). The Python reference implementation passes **150 tests** (up from 54 in v0.2). The four rounds:
 

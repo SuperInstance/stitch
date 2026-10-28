@@ -651,3 +651,84 @@ question the finding raises — should `effect` *refuse* a key absent
 from both dicts instead of recording null? — is a behaviour change,
 not a doc fix, and is left as an explicit open question for the next
 version rather than decided silently here.
+
+## v0.4 — the R&D release (2026-10-27)
+
+**How this version was made.** After the cold tests (above), Casey
+directed R&D against v0.3's own honest-gaps list, then adoption of all
+three tracks ("go forward with everything"). The research ran as
+three parallel lab tracks (prototypes quarantined outside the repo);
+the integration was then delegated to fleet seats — ZCode on the Thor,
+the Orin, and the ProArt, one workstream each, on separate branches —
+with Muse as liaison: no seat's work reached main on its own report;
+every gate below was re-run by Muse on the collected branches before
+merging. A checkpointed-incremental-audit prototype from Track B was
+**killed by its own measurements** (tail-only resume is blind to a
+prefix rewrite; a writer-supplied checkpoint launders law violations;
+the sound composition saves ~8%) and is recorded here as a dead end,
+not shipped.
+
+**Track A — byte-exactness fuzz** (1,884 payloads; shipped
+`payload_hash` vs an independent SPEC reimplementation: 0 mismatches;
+vs a real Rust serde_json probe): floats were the untested half of the
+contract. Python books `{"v": 1e-05}` where a native Rust writer books
+`0.00001` (23/779 float atoms diverge, band ~1e-9–1e-4); serde_json's
+default parser is not correctly rounded (139/776 float texts drift
+±1 ulp on parse→reserialize, including its own output — e.g.
+`123456789.12345679` → `123456789.1234568`), which is stitch-rs's
+audit path; integers beyond u64/i64 parse lossily; NaN/Infinity are
+Python-bookable but invalid JSON to Rust. Strings/keys clean 260/260.
+**Adopted:** SPEC "Numeric policy" (auditor rule: hash original bytes,
+never re-serializations; writer policy: no non-finite floats, decimal
+strings for out-of-range integers, avoid the divergence band in
+commitments), stitch-rs audit made precision-safe (verbatim number
+text via `arbitrary_precision`), 4 new cargo tests + 8 Python policy
+tests pinning the canonical outputs.
+
+**Track B — performance.** Shipped v0.3 characterized on this VM:
+append 8–23k entries/s; audit ~31 µs/entry linear (100k entries =
+3.11 s); the only scale cliff was crypto (~0.3 s per signed ATTEST in
+a keyed audit). **Adopted:** the fast Ed25519 prototype (extended
+coordinates + window-4 fixed-base table, stdlib only) integrated into
+`stitch.crypto` with the public API unchanged — signatures
+byte-identical to the old implementation (differential-checked),
+RFC 8032 vectors still pinned and passing, cross-verification both
+directions. Measured after integration, by Muse: sign 1.5 ms,
+verify 4.1 ms (vs ~300–460 ms before).
+
+**Track C — signed bookings.** Integrated from the lab prototype:
+bookings may carry an Ed25519 signature (`secret_key=` on
+`book_send`/`book_receive`); agreement functions take `booking_keys=`
+and, for keyed parties, refuse unsigned or badly-signed bookings with
+two new distinct reasons, `unsigned_booking` and `bad_signature`.
+Demonstrated in the integrated tests: the functional test's impostor
+now refuses under enforcement (including the strong form — payload
+hash flipped with the FNV chain honestly recomputed); with no keys
+anywhere, entries and verdicts are byte-identical to v0.3 (the
+original 150 tests pass unmodified). **Residual, stated in SPEC:** a
+verbatim copy of a genuine signed booking entry, replayed in another
+file claiming the same identity, still mints — the signature proves
+the booking is that tenant's statement, not that the presenting file
+is their ledger.
+
+**Merged verification (Muse, on the merge of v04-ws1 + v04-ws2 +
+v04-ws3 over d8df453):** Python suite **174 passed** (150 + 16 signed
+bookings + 8 numeric policy); cargo **10 passed**; `tests/cross_lang.py`
+PASSED; demo rc 0; examples and all three tutorial demos re-run clean
+by WS2's seat and spot-checked. Versions bumped to 0.4.0 in
+`pyproject.toml` and `stitch/__init__.py` together.
+
+**Orchestration proof, same day — Stitch War.** As a live test of the
+substrate as an agent-to-agent medium, three ZCode seats (Thor, Orin,
+ProArt) played a two-trick card game in which each play was a stitch
+booking in the player's own ledger on its own box, the game bundle
+travelled by plain scp, and each agent relayed the bundle and woke the
+next box's agent itself — no central driver after the deal. The game
+completed the full circuit (6 plays) and a witness derive from the
+four ledger files alone reproduced it exactly: trick 1 — thor 12,
+orin 4, proart 14 (proart); trick 2 — thor 3, orin 8, proart 2
+(orin); final 1–1 orin/proart, thor 0. (The game ran on the v0.3
+library, vendored into the bundle by the copy-paste route; kit and
+final bundle retained in the fleet workspace.) A tampered move file
+in rehearsal refused `payload_mismatch` at the derive and scored
+nothing.

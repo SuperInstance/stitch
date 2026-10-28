@@ -69,7 +69,7 @@ from .agreement import (
     agreed_state_n,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __author__ = "SuperInstance"
 __license__ = "MIT"
 
