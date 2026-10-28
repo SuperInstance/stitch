@@ -33,6 +33,11 @@
   .chip{font-family:var(--mono);font-size:.78rem;padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--muted);white-space:nowrap}
   .chip b{color:var(--ink);font-weight:600}
   .chip.good b{color:var(--accent)}
+  /* ---------- technical version (demoted hero intro) ---------- */
+  .techbox{margin-top:44px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:20px 24px}
+  .techbox .tech-title{font-family:var(--mono);font-size:.74rem;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);margin:0 0 10px}
+  .techbox p{color:var(--muted);font-size:.95rem;margin:0;max-width:820px}
+  .techbox p strong{color:var(--ink)}
   /* ---------- sections ---------- */
   section{margin-top:64px}
   .sec-head{margin-bottom:22px}
@@ -88,6 +93,19 @@
   .progress{font-family:var(--mono);font-size:.8rem;color:var(--faint);margin-left:auto}
   .replay-foot{color:var(--faint);font-size:.86rem;margin:16px 2px 0}
   .replay-foot code{color:var(--bad);font-size:.82rem}
+  /* ---------- rules box + cheat strip ---------- */
+  .rules{background:rgba(0,0,0,.22);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:16px 20px 10px;margin:0 0 18px}
+  .rules h3{font-family:var(--mono);font-size:.78rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
+  .rules ul{margin:0;padding-left:20px;color:var(--muted);font-size:.94rem}
+  .rules li{margin-bottom:8px}
+  .rules li b{color:var(--ink)}
+  .rules .replay-line{border-top:1px dashed var(--line);margin-top:6px;padding-top:12px;color:var(--muted);font-size:.94rem}
+  .rules .replay-line b{color:var(--accent)}
+  .cheat{margin-top:16px;border:1px solid rgba(255,122,122,.45);background:rgba(255,122,122,.06);border-radius:12px;padding:15px 19px}
+  .cheat .cheat-title{font-family:var(--mono);font-size:.78rem;letter-spacing:.14em;text-transform:uppercase;color:var(--bad);font-weight:700;margin:0 0 8px}
+  .cheat p{color:var(--muted);font-size:.93rem;margin:0}
+  .cheat p b{color:var(--ink)}
+  .cheat code{color:var(--bad);font-size:.88em}
   /* ---------- mint flow ---------- */
   .flowbox{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:24px}
   .flowbox svg{width:100%;height:auto;display:block}
@@ -103,6 +121,7 @@
   .card .tag{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 12px}
   .card p{color:var(--muted);font-size:.94rem;margin:0 0 12px}
   .card p:last-child{margin-bottom:0}
+  .card .takeaway{color:var(--ink);font-size:.97rem;line-height:1.5;border-left:3px solid var(--accent);padding-left:12px;margin:0 0 16px}
   .card .big{font-size:1.65rem;font-weight:800;color:var(--ink);letter-spacing:-.01em;line-height:1.2;margin:0 0 10px;font-family:var(--mono)}
   .card .big .arr{color:var(--accent)}
   .card .residual{border-top:1px dashed var(--line);padding-top:12px;font-size:.86rem}
@@ -138,11 +157,11 @@
 
 <header>
   <p class="eyebrow">SuperInstance / stitch</p>
-  <h1>stitch <span class="thin">— shared state, minted only where records agree.</span></h1>
-  <p class="lede">A tiny substrate primitive for <strong>accountable agent state</strong>: 11 append-only
-  stitches on hash-chained JSONL ledgers. Each agent keeps its own ledger on its own machine.
-  Shared state is never stored — it is <strong>derived, on demand, where sovereign ledgers agree</strong>,
-  under a conservation law: <strong>γ + η ≤ log<sub>2</sub>3</strong> per tenant per tick.</p>
+  <h1>Three AIs. Three computers. One card game. <span class="thin">No server.</span></h1>
+  <p class="lede"><strong>stitch</strong> is the tiny piece of software that made it possible.
+  Each player kept its own notebook — its own record — on its own machine, and wrote every
+  play into it. There was no referee, no scoreboard, no shared screen: the game exists
+  <strong>only where the notebooks agree</strong>. Step through it below, play by play.</p>
   <div class="chips">
     <span class="chip">version <b>v0.4.0</b></span>
     <span class="chip"><b>174</b> Python tests</span>
@@ -195,6 +214,17 @@
       <span class="hand">proart's hand: <b>2 · A (14)</b></span>
     </div>
 
+    <div class="rules">
+      <h3>The game, in 20 seconds</h3>
+      <ul>
+        <li><b>The deal:</b> two cards each, two tricks. In each trick everyone plays one card, and the <b>highest card wins the trick</b>.</li>
+        <li><b>Every play is written down at home:</b> when a player plays, the play goes into its own notebook — its own ledger, on its own machine — sealed with a tamper-evident hash. That hash is shown under each play as you step through.</li>
+        <li><b>Nobody ran the game:</b> there was no referee program. After the deal, each player passed the game bundle to the next machine and <b>woke its agent</b>; the game moved because the players moved it.</li>
+        <li><b>The check at the end:</b> afterwards, a witness rebuilt the whole game — every card, both tricks, the final score — from the four notebooks alone, trusting nothing else.</li>
+      </ul>
+      <p class="replay-line">▶ What follows is a <b>replay of that recorded game</b> — nothing here is simulated. Every card and every hash is copied from the actual ledgers the agents wrote while playing.</p>
+    </div>
+
     <div class="table-zone">
       <div class="trick-row">
         <div class="trick-label">Trick 1</div>
@@ -218,6 +248,15 @@
       <strong>Derived from the ledgers alone — the record is the game.</strong></div>
     </div>
 
+    <div class="cheat">
+      <p class="cheat-title">🧪 The cheat test</p>
+      <p>Could a player cheat? In rehearsal, one move file was doctored in transit — a <b>7</b> quietly
+      became an <b>8</b> after the play had been booked. When the witness derived the game, the file's
+      seal no longer matched the hash the player had committed in its own notebook at booking time:
+      the play was <b>refused</b> — <code>payload_mismatch</code> — and scored nothing. The notebooks,
+      not the files in transit, are the truth.</p>
+    </div>
+
     <div class="caption" id="caption">The dealer has dealt. Each player holds two cards, in a hand file on its own machine. Thor to play — step to book the first play.</div>
 
     <div class="controls">
@@ -226,22 +265,46 @@
       <span class="progress" id="progress">0 / 6 plays</span>
     </div>
 
-    <p class="replay-foot">Every play above is a real booking from the game's ledgers (exchange id + payload hash shown per play).
-    In rehearsal, a doctored move file refused as <code>payload_mismatch</code> at the witness derive and scored nothing — the hash committed at booking time is what a play is.</p>
+    <p class="replay-foot">Every play above is a real booking from the game's ledgers (exchange id + payload hash shown per play) — the hash committed at booking time is what a play is.</p>
   </div>
 </section>
+
+<!-- ============ WHY THIS MATTERS ============ -->
+<div class="techbox">
+  <p class="tech-title">Why this matters</p>
+  <p>The usual way to run this game — or to hand work between agents, or to reconcile what
+  two sensors saw — is a server in the middle that everyone trusts, and a referee both sides
+  accept in advance. stitch removes the middle. Each side keeps its own book; later, anyone
+  holding the books can settle what actually happened, and a quietly doctored copy gives
+  itself away at the derive (you saw it refuse, above). The card game is the smallest
+  possible stage for that shape. The same shape, unchanged, is what this repo's tutorials
+  run for agent-to-agent handoffs and corroborated observers — jobs where the parties may
+  never be online at the same time, and where “trust me” is not a record.</p>
+</div>
+
+<!-- ============ THE TECHNICAL VERSION ============ -->
+<div class="techbox">
+  <p class="tech-title">The technical version</p>
+  <p>A tiny substrate primitive for <strong>accountable agent state</strong>: 11 append-only
+  stitches on hash-chained JSONL ledgers. Each agent keeps its own ledger on its own machine.
+  Shared state is never stored — it is <strong>derived, on demand, where sovereign ledgers agree</strong>,
+  under a conservation law: <strong>γ + η ≤ log<sub>2</sub>3</strong> per tenant per tick.
+  In plain words: a hard cap (≈1.585 bits) on how much any one tenant's record can change
+  per step — change is rationed, so no one can rewrite their history wholesale and stay
+  inside the law.</p>
+</div>
 
 <!-- ============ HOW A MINT WORKS ============ -->
 <section id="mint">
   <div class="sec-head">
     <p class="kicker">The mechanism</p>
     <h2>How a mint works</h2>
-    <p>There is no server, no coordinator, no shared clock. Two ledgers are written independently,
+    <p>There is no server, no coordinator, no shared clock. Two notebooks are written independently,
     on machines that may never be online at the same time — and the shared fact exists exactly
     where, and only where, the records turn out to agree.</p>
   </div>
   <div class="flowbox">
-    <svg viewBox="0 0 960 330" role="img" aria-label="Flow: two sovereign ledgers each book the same exchange; when the files meet, agree compares the bookings and the exchange is either minted or refused">
+    <svg viewBox="0 0 960 330" role="img" aria-label="Flow: two sovereign notebooks each book the same exchange; when the files meet, a small check — agree() — compares the bookings and the exchange is either minted or refused">
       <defs>
         <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L10,5 L0,10 z" fill="#66738c"></path>
@@ -249,12 +312,12 @@
       </defs>
       <!-- beat 1: two sovereign ledgers -->
       <rect x="20" y="55" width="180" height="92" rx="12" fill="#0e1219" stroke="#263049"></rect>
-      <text x="110" y="88" text-anchor="middle" fill="#e8ecf4" font-size="15" font-weight="700" font-family="ui-monospace,Menlo,monospace">LEDGER A</text>
-      <text x="110" y="112" text-anchor="middle" fill="#9aa6bd" font-size="12">machine A · sovereign</text>
+      <text x="110" y="88" text-anchor="middle" fill="#e8ecf4" font-size="15" font-weight="700" font-family="ui-monospace,Menlo,monospace">A'S NOTEBOOK</text>
+      <text x="110" y="112" text-anchor="middle" fill="#9aa6bd" font-size="11">on A's machine · sovereign</text>
       <text x="110" y="130" text-anchor="middle" fill="#66738c" font-size="11">hash-chained JSONL</text>
       <rect x="20" y="185" width="180" height="92" rx="12" fill="#0e1219" stroke="#263049"></rect>
-      <text x="110" y="218" text-anchor="middle" fill="#e8ecf4" font-size="15" font-weight="700" font-family="ui-monospace,Menlo,monospace">LEDGER B</text>
-      <text x="110" y="242" text-anchor="middle" fill="#9aa6bd" font-size="12">machine B · sovereign</text>
+      <text x="110" y="218" text-anchor="middle" fill="#e8ecf4" font-size="15" font-weight="700" font-family="ui-monospace,Menlo,monospace">B'S NOTEBOOK</text>
+      <text x="110" y="242" text-anchor="middle" fill="#9aa6bd" font-size="11">on B's machine · sovereign</text>
       <text x="110" y="260" text-anchor="middle" fill="#66738c" font-size="11">hash-chained JSONL</text>
       <text x="110" y="32" text-anchor="middle" fill="#66738c" font-size="12" font-weight="700" letter-spacing="2">1 · TWO SELVES</text>
       <!-- beat 2: both book -->
@@ -270,9 +333,10 @@
       <line x1="490" y1="166" x2="558" y2="166" stroke="#66738c" stroke-width="2" marker-end="url(#arr)"></line>
       <rect x="565" y="105" width="150" height="122" rx="12" fill="#171e2e" stroke="#263049"></rect>
       <text x="640" y="132" text-anchor="middle" fill="#66738c" font-size="12" font-weight="700" letter-spacing="2">3 · FILES MEET</text>
-      <text x="640" y="162" text-anchor="middle" fill="#e8ecf4" font-size="14" font-family="ui-monospace,Menlo,monospace">agree()</text>
-      <text x="640" y="186" text-anchor="middle" fill="#9aa6bd" font-size="11.5">compares the two</text>
-      <text x="640" y="202" text-anchor="middle" fill="#9aa6bd" font-size="11.5">bookings, byte-exact</text>
+      <text x="640" y="160" text-anchor="middle" fill="#e8ecf4" font-size="14" font-family="ui-monospace,Menlo,monospace">agree()</text>
+      <text x="640" y="183" text-anchor="middle" fill="#9aa6bd" font-size="11.5">a small check:</text>
+      <text x="640" y="199" text-anchor="middle" fill="#9aa6bd" font-size="11.5">compares the two</text>
+      <text x="640" y="215" text-anchor="middle" fill="#9aa6bd" font-size="11.5">bookings, byte-exact</text>
       <!-- beat 4: mint / refuse -->
       <line x1="715" y1="140" x2="778" y2="104" stroke="#7ee0a3" stroke-width="2" marker-end="url(#arr)"></line>
       <line x1="715" y1="192" x2="778" y2="228" stroke="#ff7a7a" stroke-width="2" marker-end="url(#arr)"></line>
@@ -311,6 +375,7 @@
     <div class="card">
       <p class="tag">Track A · byte-exactness fuzz</p>
       <h3>Floats were the untested half of the contract</h3>
+      <p class="takeaway">Why it matters: two honest computers can write the same number differently — stitch now has a written rule for that, checked 1,884 ways.</p>
       <p class="big">1,884 <span style="font-size:1rem;color:var(--muted)">payloads probed</span></p>
       <p><b>1,884 payloads</b> probed across Python and Rust. Python books <code>1e-05</code> where a native
       Rust writer books <code>0.00001</code> — and <b>139 of 776</b> float texts drift ±1 ulp through a
@@ -322,6 +387,7 @@
     <div class="card">
       <p class="tag">Track B · performance</p>
       <h3>Fast Ed25519 — the audit cliff is gone</h3>
+      <p class="takeaway">Why it matters: checking a signature used to cost about a third of a second, so auditing a long signed record was mostly waiting on arithmetic. Now it isn't.</p>
       <p class="big">360 ms <span class="arr">→</span> 1.5 ms <span style="font-size:1rem;color:var(--muted)">sign</span></p>
       <p>Verify: ~290 ms → ~4 ms. Extended coordinates plus a fixed-base table, <b>stdlib only</b>,
       public API unchanged — and the signatures are <b>byte-identical</b> to the old implementation,
@@ -332,6 +398,7 @@
     <div class="card">
       <p class="tag">Track C · signed bookings</p>
       <h3>The impostor now refuses</h3>
+      <p class="takeaway">Why it matters: in v0.3, a stranger's notebook that merely claimed your name could mint. Where signatures are enforced, it can't anymore.</p>
       <p class="big" style="font-size:1.25rem">unsigned_booking<br>bad_signature</p>
       <p>In v0.3, a fresh impostor ledger merely claiming a tenant's identity <b>minted</b> — bookings
       were unsigned, identity a string claim (demonstrated, and filed in VERIFICATION.md).</p>
@@ -362,18 +429,22 @@
     <div class="tl-item">
       <span class="ver">v0.1</span>
       <p class="what">The <b>11 stitches</b> and the <b>conservation law</b> — append-only operations on
-      hash-chained ledgers, γ + η ≤ log<sub>2</sub>3 per tenant per tick, enforced at write time.</p>
+      hash-chained ledgers, γ + η ≤ log<sub>2</sub>3 per tenant per tick, enforced at write time.
+      The bet: <b>eleven operations is enough</b>.</p>
     </div>
     <div class="tl-item">
       <span class="ver">v0.2</span>
       <p class="what">The <b>agreement layer</b>: exchange bookings, minting where two ledgers agree,
-      distinct refusal verdicts, and the <b>head-hash anchor</b> against tail-truncation.</p>
+      distinct refusal verdicts, and the <b>head-hash anchor</b> against tail-truncation.
+      Why it mattered: <b>two machines agreeing on a fact neither one stored</b>.</p>
     </div>
     <div class="tl-item">
       <span class="ver">v0.3</span>
       <p class="what">Budgets become <b>declarations</b>; <b>N-party agreement</b>; opt-in <b>Ed25519
       attestations</b>. Suite 54 → 150 tests. Adopted with a <b>position-aware budget patch</b> after
-      independent assessment caught a flaw in the draft.</p>
+      independent assessment caught a flaw in the draft.
+      Why it mattered: <b>more parties, signed claims</b> — and a draft flaw caught by independent
+      reading, <b>patched, not shipped</b>.</p>
     </div>
     <div class="tl-item now">
       <span class="ver">v0.4</span>
