@@ -269,13 +269,29 @@
   </div>
 </section>
 
+<!-- ============ WHY THIS MATTERS ============ -->
+<div class="techbox">
+  <p class="tech-title">Why this matters</p>
+  <p>The usual way to run this game — or to hand work between agents, or to reconcile what
+  two sensors saw — is a server in the middle that everyone trusts, and a referee both sides
+  accept in advance. stitch removes the middle. Each side keeps its own book; later, anyone
+  holding the books can settle what actually happened, and a quietly doctored copy gives
+  itself away at the derive (you saw it refuse, above). The card game is the smallest
+  possible stage for that shape. The same shape, unchanged, is what this repo's tutorials
+  run for agent-to-agent handoffs and corroborated observers — jobs where the parties may
+  never be online at the same time, and where “trust me” is not a record.</p>
+</div>
+
 <!-- ============ THE TECHNICAL VERSION ============ -->
 <div class="techbox">
   <p class="tech-title">The technical version</p>
   <p>A tiny substrate primitive for <strong>accountable agent state</strong>: 11 append-only
   stitches on hash-chained JSONL ledgers. Each agent keeps its own ledger on its own machine.
   Shared state is never stored — it is <strong>derived, on demand, where sovereign ledgers agree</strong>,
-  under a conservation law: <strong>γ + η ≤ log<sub>2</sub>3</strong> per tenant per tick.</p>
+  under a conservation law: <strong>γ + η ≤ log<sub>2</sub>3</strong> per tenant per tick.
+  In plain words: a hard cap (≈1.585 bits) on how much any one tenant's record can change
+  per step — change is rationed, so no one can rewrite their history wholesale and stay
+  inside the law.</p>
 </div>
 
 <!-- ============ HOW A MINT WORKS ============ -->
