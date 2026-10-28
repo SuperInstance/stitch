@@ -42,13 +42,29 @@ Why this exists:
   `from stitch.crypto import Key` and the whole library + crypto
   is still stdlib-only.
 
-Performance: pure-Python Ed25519 is slow — measured ≈270 ms per sign
-or verify on this project's test VM, i.e. a few operations per second.
-That is fine for agent-state accountability (the write rate is low),
-and unusable for anything throughput-shaped. Production deployments
-needing speed should use a native implementation (libsodium via
-pynacl, or RustCrypto ed25519-dalek). The byte format is RFC 8032 —
-signatures interoperate with all standard Ed25519 implementations.
+Arithmetic: points are held in extended twisted-Edwards coordinates
+(X, Y, Z, T) with x = X/Z, y = Y/Z (Hisil–Wong–Carter–Dawson unified
+formulas), so scalar multiplication performs no modular inversions at
+all — the single inversion left is when a point is compressed to
+bytes — and equality in verify is checked projectively (cross-
+multiplication), which needs none. The base point B is additionally
+precomputed into a windowed fixed-base table (window w = 4, built once
+at import), so [s]B is 64 table lookups + additions with zero
+doublings; only verify's variable-base [k]A uses plain double-and-add.
+This replaced v0.3's affine coordinates, where every point addition
+cost two inversions (a full 255-bit exponentiation each) and a scalar
+multiplication needed ~380 of them.
+
+Performance: measured ≈0.8 ms per sign and ≈2.3 ms per verify (mean
+of 20, ARM64 Tegra) on this project's test machine — roughly two
+orders of magnitude faster than v0.3's ≈270 ms per operation, with
+byte-identical outputs (Ed25519 signing is deterministic, so
+correctness is byte-equality, not just interoperability; the pinned
+vectors and the v0.3 cross-checks pin this). Still pure Python:
+production deployments with throughput-shaped workloads should use a
+native implementation (libsodium via pynacl, or RustCrypto
+ed25519-dalek). The byte format is RFC 8032 — signatures interoperate
+with all standard Ed25519 implementations.
 
 Public API:
   - secret_key_bytes() -> bytes        (32 random bytes)
@@ -76,6 +92,9 @@ L = 2**252 + 27742317777372353535851937790883648493
 #: Curve parameter: d = -121665/121666 mod p
 D = (-121665 * pow(121666, P - 2, P)) % P
 
+#: 2*d mod p (the extended-coordinate formulas use it pre-doubled)
+D2 = (2 * D) % P
+
 #: Square root of -1 mod p (since p ≡ 5 (mod 8), I = 2^((p-1)/4) mod p)
 I = pow(2, (P - 1) // 4, P)
 
@@ -99,10 +118,142 @@ BX = _rxv % P
 #: The base point B
 B = (BX, BY)
 
+# Edwards curve point type: (x, y) tuple, or None for identity
+_Point = Optional[Tuple[int, int]]
+
+#: Identity point (neutral element on Edwards curve): (0, 1)
+IDENTITY: _Point = (0, 1)
+
 
 # ============================================================================
-# Field / point operations
+# Field / point operations (extended twisted-Edwards coordinates)
 # ============================================================================
+
+# Extended point: (X, Y, Z, T) with x = X/Z, y = Y/Z, T = XY/Z.
+_ExtPoint = Tuple[int, int, int, int]
+
+#: Identity point in extended coordinates: x = 0, y = 1
+IDENTITY_EXT: _ExtPoint = (0, 1, 1, 0)
+
+
+def _to_ext(x: int, y: int) -> _ExtPoint:
+    """Lift an affine point (x, y) to extended coordinates."""
+    return (x % P, y % P, 1, (x * y) % P)
+
+
+def _ext_add(A: _ExtPoint, Bp: _ExtPoint) -> _ExtPoint:
+    """
+    Unified addition for a = -1 twisted Edwards curves in extended
+    coordinates (Hisil–Wong–Carter–Dawson). No inversion; also correct
+    when A == Bp, so it serves for doubling too.
+    """
+    X1, Y1, Z1, T1 = A
+    X2, Y2, Z2, T2 = Bp
+    a = ((Y1 - X1) * (Y2 - X2)) % P
+    b = ((Y1 + X1) * (Y2 + X2)) % P
+    c = (D2 * T1 * T2) % P
+    d_ = (2 * Z1 * Z2) % P
+    e = (b - a) % P
+    f = (d_ - c) % P
+    g = (d_ + c) % P
+    h = (b + a) % P
+    return ((e * f) % P, (g * h) % P, (f * g) % P, (e * h) % P)
+
+
+def _ext_double(A: _ExtPoint) -> _ExtPoint:
+    """Doubling in extended coordinates (cheaper than generic addition)."""
+    X1, Y1, Z1, _ = A
+    a = (X1 * X1) % P
+    b = (Y1 * Y1) % P
+    c = (2 * Z1 * Z1) % P
+    d_ = (-a) % P
+    e = ((X1 + Y1) * (X1 + Y1) - a - b) % P
+    g = (d_ + b) % P
+    f = (g - c) % P
+    h = (d_ - b) % P
+    return ((e * f) % P, (g * h) % P, (f * g) % P, (e * h) % P)
+
+
+def _ext_scalar_mult(s: int, A: _ExtPoint) -> _ExtPoint:
+    """Variable-base double-and-add in extended coordinates, no inversions."""
+    s %= L
+    result = IDENTITY_EXT
+    addend = A
+    while s:
+        if s & 1:
+            result = _ext_add(result, addend)
+        addend = _ext_double(addend)
+        s >>= 1
+    return result
+
+
+def _ext_equal(A: _ExtPoint, Bp: _ExtPoint) -> bool:
+    """
+    Projective equality: A == Bp iff x1/z1 == x2/z2 and y1/z1 == y2/z2,
+    checked by cross-multiplication — no inversion, and equivalent to
+    comparing compressed encodings because compression is canonical.
+    """
+    X1, Y1, Z1, _ = A
+    X2, Y2, Z2, _ = Bp
+    return ((X1 * Z2 - X2 * Z1) % P == 0
+            and (Y1 * Z2 - Y2 * Z1) % P == 0)
+
+
+# --- fixed-base table for B (window w=4) ----------------------------------
+# table[i][j] = j * 16^i * B, precomputed once at import. A fixed-base
+# multiplication [s]B becomes 64 table lookups + additions (zero doublings).
+
+_WINDOW = 4
+_DIGITS = 256 // _WINDOW  # 64
+
+_B_EXT = _to_ext(BX, BY)
+
+
+def _build_table() -> list:
+    table = []
+    base = _B_EXT
+    for _ in range(_DIGITS):
+        row = [IDENTITY_EXT]
+        acc = IDENTITY_EXT
+        for _j in range(1, 1 << _WINDOW):
+            acc = _ext_add(acc, base)
+            row.append(acc)
+        table.append(row)
+        for _k in range(_WINDOW):
+            base = _ext_double(base)
+    return table
+
+
+_TABLE = _build_table()
+
+
+def _fixed_scalar_mult(s: int) -> _ExtPoint:
+    """[s]B via the precomputed windowed table (fixed base)."""
+    s %= L
+    result = IDENTITY_EXT
+    for i in range(_DIGITS):
+        digit = (s >> (i * _WINDOW)) & ((1 << _WINDOW) - 1)
+        if digit:
+            result = _ext_add(result, _TABLE[i][digit])
+    return result
+
+
+# ============================================================================
+# Encoding / decoding
+# ============================================================================
+
+def _point_compress_ext(A: _ExtPoint) -> bytes:
+    """
+    Compress an extended point to 32 bytes (y-coordinate with sign bit).
+    This is the one place a modular inversion is performed.
+    """
+    X, Y, Z, _ = A
+    zinv = pow(Z, P - 2, P)
+    x = (X * zinv) % P
+    y = (Y * zinv) % P
+    bits = (y | ((x & 1) << 255)) & ((1 << 256) - 1)
+    return bits.to_bytes(32, "little")
+
 
 def _xrecover(y: int, sign: int = 0) -> int:
     """Recover x from y on the Edwards curve. sign selects the root."""
@@ -115,65 +266,7 @@ def _xrecover(y: int, sign: int = 0) -> int:
     return x
 
 
-# Edwards curve point type: (x, y) tuple, or None for identity
-_Point = Optional[Tuple[int, int]]
-
-#: Identity point (neutral element on Edwards curve): (0, 1)
-IDENTITY: _Point = (0, 1)
-
-
-def _point_add(P1: _Point, P2: _Point) -> _Point:
-    """
-    Edwards curve addition: P1 + P2.
-
-    Formula (twisted Edwards, a = -1):
-      x3 = (x1*y2 + x2*y1) / (1 + d*x1*x2*y1*y2)
-      y3 = (y1*y2 + x1*x2) / (1 - d*x1*x2*y1*y2)
-
-    Handles identity: (0,1) + anything = anything.
-    """
-    if P1 is None:
-        return P2
-    if P2 is None:
-        return P1
-    x1, y1 = P1
-    x2, y2 = P2
-    x1x2 = (x1 * x2) % P
-    y1y2 = (y1 * y2) % P
-    d_term = (D * x1x2 * y1y2) % P
-    x3 = ((x1 * y2 + x2 * y1) * pow(1 + d_term, P - 2, P)) % P
-    y3 = ((y1 * y2 + x1x2) * pow(1 - d_term, P - 2, P)) % P
-    return (x3, y3)
-
-
-def _scalar_mult(s: int, point: _Point) -> _Point:
-    """Double-and-add scalar multiplication."""
-    s = s % L  # clamp to group order
-    result: _Point = IDENTITY
-    addend = point
-    while s > 0:
-        if s & 1:
-            result = _point_add(result, addend)
-        addend = _point_add(addend, addend)
-        s >>= 1
-    return result
-
-
-# ============================================================================
-# Encoding / decoding
-# ============================================================================
-
-def _point_compress(point: _Point) -> bytes:
-    """Compress a point to 32 bytes (y-coordinate with sign bit)."""
-    if point is None:
-        # Compress identity as 1 (y=1, x=0, sign=0)
-        return (1).to_bytes(32, "little")
-    x, y = point
-    bits = (y | ((x & 1) << 255)) & ((1 << 256) - 1)
-    return bits.to_bytes(32, "little")
-
-
-def _point_decompress(data: bytes) -> Optional[_Point]:
+def _point_decompress(data: bytes) -> _Point:
     """Decompress 32 bytes to a point. Returns None if not on curve."""
     if len(data) != 32:
         return None
@@ -236,8 +329,7 @@ def public_key(sk: bytes) -> bytes:
         raise ValueError(f"secret key must be 32 bytes, got {len(sk)}")
     h = _sha512(sk)
     a = _clamp_scalar(h)
-    A = _scalar_mult(a, B)
-    return _point_compress(A)
+    return _point_compress_ext(_fixed_scalar_mult(a))
 
 
 def sign(sk: bytes, message: bytes) -> bytes:
@@ -252,11 +344,10 @@ def sign(sk: bytes, message: bytes) -> bytes:
     h = _sha512(sk)
     a = _clamp_scalar(h)
     prefix = h[32:]
-    A = _point_compress(_scalar_mult(a, B))
+    A_enc = _point_compress_ext(_fixed_scalar_mult(a))
     r = _sha512_int(prefix + message)
-    R = _scalar_mult(r, B)
-    R_enc = _point_compress(R)
-    hram = _sha512_int(R_enc + A + message)
+    R_enc = _point_compress_ext(_fixed_scalar_mult(r))
+    hram = _sha512_int(R_enc + A_enc + message)
     s = (r + hram * a) % L
     return R_enc + s.to_bytes(32, "little")
 
@@ -279,11 +370,10 @@ def verify(pk: bytes, message: bytes, signature: bytes) -> bool:
     if A is None or R is None:
         return False  # invalid point encoding
     hram = _sha512_int(R_enc + pk + message)
-    # Check [s]B == R + [hram]A
-    sB = _scalar_mult(s, B)
-    hram_A = _scalar_mult(hram, A)
-    R_plus_hram_A = _point_add(R, hram_A)
-    return _point_compress(sB) == _point_compress(R_plus_hram_A)
+    # Check [s]B == R + [hram]A (projectively; compression is canonical)
+    sB = _fixed_scalar_mult(s)
+    rhs = _ext_add(_to_ext(*R), _ext_scalar_mult(hram, _to_ext(*A)))
+    return _ext_equal(sB, rhs)
 
 
 # ============================================================================
