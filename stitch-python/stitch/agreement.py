@@ -44,6 +44,11 @@ Honest limits (also in SPEC.md):
     verifies such signatures when the caller supplies the tenants'
     public keys (`attest_keys`). Entries written without a key keep the
     v0.1 placeholder tag and are counted as unsigned, not verified.
+    Signed bookings (Track C, ported from the verified lab prototype):
+    bookings can also be signed, opt-in on both sides —
+    `book_send`/`book_receive` accept `secret_key=`, and
+    `agree`/`agreed_state`/`agree_n`/`agreed_state_n` accept
+    `booking_keys=`. With no keys anywhere, behaviour is unchanged.
   - The audit uses each tenant's in-ledger budget declaration when one
     is in force (declarations are position-aware: a declaration covers
     entries from its own position onward, never earlier ones) and
@@ -81,6 +86,15 @@ PAYLOAD_MISMATCH = "payload_mismatch"
 PEER_MISMATCH = "peer_mismatch"
 CHAIN_BROKEN = "chain_broken"
 LAW_VIOLATED = "law_violated"
+# TRACK-C PROTOTYPE (signed bookings) — new refusal reasons. A booking by
+# a party the auditor keyed (see `booking_keys` on agree/agree_n) that
+# carries no well-formed signature refuses as UNSIGNED_BOOKING; one whose
+# signature does not verify refuses as BAD_SIGNATURE. The split mirrors
+# the attest audit's verified / unsigned / failures trichotomy: "the
+# writer never opted in" is a different operational fact from "this
+# signature is wrong", and an auditor responding to them differs.
+BAD_SIGNATURE = "bad_signature"
+UNSIGNED_BOOKING = "unsigned_booking"
 
 
 # ============================================================================
@@ -104,31 +118,89 @@ def payload_hash(payload) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def booking_signing_material(ns: str, descriptor: dict) -> bytes:
+    """
+    TRACK-C PROTOTYPE: the canonical bytes a booking signature covers.
+
+    A versioned JSON object — sorted keys, `(",", ":")` separators, raw
+    UTF-8 (the v0.3 pin), exactly the canonicalisation the rest of
+    stitch uses — over precisely the booking's commitment fields:
+    who booked it (`tenant` = the entry's `ns`), which exchange, which
+    side, who the counterpart is, and the payload hash. The `"v"` tag
+    is domain separation: a booking signature can never be mistaken
+    for an ATTEST signature (whose material is the colon string
+    "tenant:cell:claim"), and a future format change gets a new tag
+    instead of silently reinterpreting old signatures.
+
+    Deliberately NOT covered: the cell id (it is computed FROM the
+    payload, which contains the signature — including it would be
+    circular), the entry timestamp, and the ledger's identity as a
+    file. Consequence, stated plainly: a genuine signed booking can be
+    replayed verbatim into another ledger that claims the same `ns`.
+    What signing prevents is FORGERY — booking an exchange the key
+    holder never booked, or altering any covered field of a booking
+    they did. See REPORT.md / SPEC-DELTA.md for the full discussion.
+    """
+    material = {
+        "v": "stitch-booking/1",
+        "tenant": ns,
+        "xchg": descriptor.get("xchg"),
+        "side": descriptor.get("side"),
+        "peer": descriptor.get("peer"),
+        "ph": descriptor.get("ph"),
+    }
+    canonical = json.dumps(material, sort_keys=True,
+                           separators=(",", ":"), ensure_ascii=False)
+    return canonical.encode("utf-8")
+
+
 def _book(tenant: Tenant, ledger: Ledger, xchg: str, peer: str,
-          payload, side: str) -> Cell:
+          payload, side: str, secret_key=None) -> Cell:
     descriptor = {
         "xchg": xchg,
         "side": side,
         "peer": peer,
         "ph": payload_hash(payload),
     }
+    if secret_key is not None:
+        # TRACK-C PROTOTYPE: opt-in signed booking. The signature lives
+        # inside the booking descriptor (payload key "sig", 128 hex
+        # chars) — a booking stays a plain BIND of kind "exchange", no
+        # new stitch, and `bind` itself is untouched. With no key the
+        # descriptor is exactly the v0.2/v0.3 one, byte for byte.
+        if len(secret_key) != 32:
+            raise ValueError(
+                f"secret_key must be a 32-byte Ed25519 secret key, "
+                f"got {len(secret_key)} bytes")
+        from .crypto.ed25519 import sign as _ed25519_sign
+        material = booking_signing_material(tenant.identity, descriptor)
+        descriptor["sig"] = _ed25519_sign(secret_key, material).hex()
     return bind(tenant, ledger, kind=EXCHANGE_KIND, payload=descriptor)
 
 
 def book_send(tenant: Tenant, ledger: Ledger, xchg: str, peer: str,
-              payload) -> Cell:
+              payload, secret_key: Optional[bytes] = None) -> Cell:
     """
     Book the SEND half of exchange `xchg` into your own ledger.
 
     `peer` is the counterpart's tenant identity; `payload` is the thing
     being exchanged (or a descriptor of it). Only its hash is recorded.
     Costs no γ, like LINK — a booking is an observation, not a surprise.
+
+    TRACK-C PROTOTYPE: pass `secret_key` (32-byte Ed25519 secret key)
+    to sign the booking; the descriptor then carries a "sig" field (see
+    `booking_signing_material`). An auditor who supplies your public
+    key via `agree(..., booking_keys=...)` will REQUIRE that signature
+    to verify. Without a key the booking is exactly as in v0.2/v0.3.
+    Recommended: use your key's public hex as your tenant identity
+    (`Key.identity`), so the ledger's `ns` itself names the key.
     """
-    return _book(tenant, ledger, xchg, peer, payload, "send")
+    return _book(tenant, ledger, xchg, peer, payload, "send",
+                 secret_key=secret_key)
 
 
 def book_receive(tenant: Tenant, ledger: Ledger, xchg: str, peer: str,
-                 payload) -> Cell:
+                 payload, secret_key: Optional[bytes] = None) -> Cell:
     """
     Book the RECEIVE half of exchange `xchg` into your own ledger.
 
@@ -136,8 +208,11 @@ def book_receive(tenant: Tenant, ledger: Ledger, xchg: str, peer: str,
     actually received. If it differs from what the sender booked, the
     payload hashes will not meet and `agree` will refuse with
     PAYLOAD_MISMATCH — which is the point.
+
+    `secret_key`: same opt-in signed-booking behaviour as `book_send`.
     """
-    return _book(tenant, ledger, xchg, peer, payload, "receive")
+    return _book(tenant, ledger, xchg, peer, payload, "receive",
+                 secret_key=secret_key)
 
 
 # ============================================================================
@@ -383,6 +458,69 @@ def audit_ledger(path: PathLike, budget: float = LOG2_3,
 
 
 # ============================================================================
+# TRACK-C PROTOTYPE — booking signature enforcement (opt-in, auditor-side)
+# ============================================================================
+
+def _normalise_booking_keys(booking_keys) -> dict:
+    """A booking_keys map with values as 32 raw public-key bytes."""
+    out = {}
+    for identity, key in booking_keys.items():
+        if isinstance(key, str):
+            try:
+                key = bytes.fromhex(key)
+            except ValueError:
+                raise ValueError(
+                    f"booking_keys[{identity!r}] is not valid hex") from None
+        if not isinstance(key, (bytes, bytearray)) or len(key) != 32:
+            raise ValueError(
+                f"booking_keys[{identity!r}] must be a 32-byte Ed25519 "
+                f"public key (bytes or 64-char hex), got {key!r}")
+        out[identity] = bytes(key)
+    return out
+
+
+def _booking_signature_failure(bookings, booking_keys):
+    """
+    Check every booking in `bookings` ([(ns, descriptor), ...]) whose
+    writer the auditor keyed. Return None if all keyed bookings carry
+    valid signatures, else (reason, detail) for the first failure.
+
+    Fail-closed scope: EVERY booking for the exchange by a keyed party
+    is checked, not just the one that would end up mirroring — an
+    auditor should not have to guess which of several bookings is
+    "the real one". Bookings by parties with no supplied key are not
+    checked at all: enforcement is per-party, exactly as supplied.
+    """
+    if not booking_keys:
+        return None
+    from .crypto.ed25519 import verify as _ed25519_verify
+    keys = _normalise_booking_keys(booking_keys)
+    for ns, p in bookings:
+        if ns not in keys:
+            continue
+        sig = p.get("sig")
+        sig_bytes = None
+        if isinstance(sig, str) and len(sig) == 128:
+            try:
+                sig_bytes = bytes.fromhex(sig)
+            except ValueError:
+                sig_bytes = None
+        if sig_bytes is None:
+            return (UNSIGNED_BOOKING,
+                    f"booking for exchange {p.get('xchg')!r} by {ns} "
+                    f"(side={p.get('side')}) carries no Ed25519 "
+                    f"signature, but the auditor supplied a key for "
+                    f"that party")
+        material = booking_signing_material(ns, p)
+        if not _ed25519_verify(keys[ns], material, sig_bytes):
+            return (BAD_SIGNATURE,
+                    f"booking signature does not verify for {ns} "
+                    f"(exchange {p.get('xchg')!r}, side={p.get('side')}, "
+                    f"peer={p.get('peer')}, ph={p.get('ph')})")
+    return None
+
+
+# ============================================================================
 # Bilateral agreement / minting
 # ============================================================================
 
@@ -424,7 +562,7 @@ def _bookings(entries: list, xchg: str):
 
 
 def agree(path_a: PathLike, path_b: PathLike, xchg: str,
-          budget: float = LOG2_3) -> Agreement:
+          budget: float = LOG2_3, booking_keys=None) -> Agreement:
     """
     Decide whether exchange `xchg` is shared state between two ledgers.
 
@@ -435,6 +573,18 @@ def agree(path_a: PathLike, path_b: PathLike, xchg: str,
     naming each other. Argument order does not matter (the sender is
     whoever booked the SEND), but `head_a`/`entries_a` always describe
     the first argument's ledger.
+
+    TRACK-C PROTOTYPE: `booking_keys` (optional) maps tenant identity
+    to an Ed25519 public key (bytes or 64-char hex) — the auditor's
+    out-of-band binding of keys to identities. When a key is supplied
+    for a party, EVERY booking for `xchg` by that party in either
+    ledger must carry a valid signature (see `book_send(secret_key=)`)
+    or the verdict refuses: UNSIGNED_BOOKING if it carries no
+    well-formed signature, BAD_SIGNATURE if one does not verify.
+    Signature enforcement runs after the chain/law audits and before
+    mirror matching (fail-closed). When `booking_keys` is None (the
+    default), no signature work happens and the semantics are exactly
+    v0.3's. Supplying keys for only one party enforces only that party.
     """
     va, entries_a = _audit(path_a, budget)
     vb, entries_b = _audit(path_b, budget)
@@ -457,6 +607,14 @@ def agree(path_a: PathLike, path_b: PathLike, xchg: str,
     if not vb.law_ok:
         return refuse(LAW_VIOLATED,
                       f"{vb.path}: {vb.law_violations[0]}")
+
+    # TRACK-C: opt-in booking signature enforcement (no-op when the
+    # auditor supplied no keys — the v0.3 path, unchanged).
+    sig_failure = _booking_signature_failure(
+        _bookings(entries_a, xchg) + _bookings(entries_b, xchg),
+        booking_keys)
+    if sig_failure is not None:
+        return refuse(sig_failure[0], sig_failure[1])
 
     # Candidates: (sender_ns, descriptor, counterpart_entries), ledger A
     # scanned before ledger B so the outcome is deterministic.
@@ -509,12 +667,15 @@ def agree(path_a: PathLike, path_b: PathLike, xchg: str,
 
 
 def agreed_state(path_a: PathLike, path_b: PathLike,
-                 budget: float = LOG2_3):
+                 budget: float = LOG2_3, booking_keys=None):
     """
     The derived fold of two ledgers: (agreed, refused) — an Agreement for
     every exchange id booked in either ledger, partitioned by outcome,
     each list sorted by exchange id. The agreed list is the pair's
     shared state; it exists only here, as a fold of the two records.
+
+    `booking_keys` is passed through to `agree` for every exchange (see
+    its docstring); the default None preserves v0.3 semantics exactly.
     """
     _, entries_a = _audit(path_a, budget)
     _, entries_b = _audit(path_b, budget)
@@ -525,7 +686,8 @@ def agreed_state(path_a: PathLike, path_b: PathLike,
                 ids.add((e.get("payload") or {}).get("xchg"))
     agreed, refused = [], []
     for xchg in sorted(ids):
-        verdict = agree(path_a, path_b, xchg, budget=budget)
+        verdict = agree(path_a, path_b, xchg, budget=budget,
+                        booking_keys=booking_keys)
         (agreed if verdict.agreed else refused).append(verdict)
     return agreed, refused
 
@@ -636,7 +798,8 @@ class AgreementN:
     paths: list = field(default_factory=list)
 
 
-def agree_n(paths, xchg: str, budget: float = LOG2_3) -> AgreementN:
+def agree_n(paths, xchg: str, budget: float = LOG2_3,
+            booking_keys=None) -> AgreementN:
     """
     Decide whether exchange `xchg` is shared state across N ledgers.
 
@@ -657,6 +820,10 @@ def agree_n(paths, xchg: str, budget: float = LOG2_3) -> AgreementN:
     For N=2 this is exactly `agree` — a 2-cycle. For N>2 the typical
     ring pattern is each party booking a SEND to their successor and a
     RECEIVE from their predecessor.
+
+    TRACK-C PROTOTYPE: `booking_keys` enforces booking signatures for
+    keyed parties exactly as in `agree` (UNSIGNED_BOOKING /
+    BAD_SIGNATURE refusals); default None = v0.3 semantics.
     """
     path_strs = [os.fspath(p) for p in paths]
 
@@ -692,6 +859,15 @@ def agree_n(paths, xchg: str, budget: float = LOG2_3) -> AgreementN:
                 p = e.get("payload") or {}
                 if p.get("xchg") == xchg:
                     all_bookings.append((i, e.get("ns"), p))
+
+    # TRACK-C: opt-in booking signature enforcement, same rule as
+    # bilateral agree() — after chain/law, before mirror semantics,
+    # no-op when no keys are supplied. (If this were left out, the
+    # N-party path would be a trivial bypass of the bilateral check.)
+    sig_failure = _booking_signature_failure(
+        [(ns, p) for _, ns, p in all_bookings], booking_keys)
+    if sig_failure is not None:
+        return refuse(sig_failure[0], sig_failure[1])
 
     if not all_bookings:
         return refuse(NO_SEND,
@@ -743,7 +919,7 @@ def agree_n(paths, xchg: str, budget: float = LOG2_3) -> AgreementN:
     )
 
 
-def agreed_state_n(paths, budget: float = LOG2_3):
+def agreed_state_n(paths, budget: float = LOG2_3, booking_keys=None):
     """
     The derived fold of N ledgers: (agreed, refused) — an AgreementN for
     every exchange id booked in any of the N ledgers, partitioned by
@@ -767,6 +943,7 @@ def agreed_state_n(paths, budget: float = LOG2_3):
 
     agreed, refused = [], []
     for xchg in sorted(ids):
-        verdict = agree_n(path_strs, xchg, budget=budget)
+        verdict = agree_n(path_strs, xchg, budget=budget,
+                          booking_keys=booking_keys)
         (agreed if verdict.agreed else refused).append(verdict)
     return agreed, refused
