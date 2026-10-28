@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from dataclasses import dataclass, field
 from typing import Optional, Union
@@ -116,6 +117,37 @@ def payload_hash(payload) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"),
                            ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _reject_non_finite(node, path: str = "payload") -> None:
+    """
+    Writer-side enforcement of the SPEC numeric policy: non-finite
+    floats (NaN, +Infinity, -Infinity) MUST NOT be booked — they are
+    invalid JSON tokens, and no other implementation can reproduce
+    their hash (a Rust writer cannot construct them at all).
+
+    Booking helpers call this BEFORE any signing or ledger write, so a
+    refusal is a pure ValueError: nothing is appended and nothing is
+    mutated — the append-only refusal invariant.
+
+    The read side deliberately never calls this: `payload_hash`,
+    `agree` and the audit paths hash foreign payloads exactly as they
+    find them and return verdicts. Writers are policed; readers are
+    not — legacy or foreign ledgers containing non-finite values must
+    still audit to a verdict, never crash the auditor.
+    """
+    if isinstance(node, float):
+        if not math.isfinite(node):
+            raise ValueError(
+                f"non-finite float {node!r} at {path}: NaN/Infinity "
+                f"MUST NOT be booked (SPEC numeric policy)")
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            _reject_non_finite(k, f"{path}.<key>")
+            _reject_non_finite(v, f"{path}[{k!r}]")
+    elif isinstance(node, (list, tuple)):
+        for i, v in enumerate(node):
+            _reject_non_finite(v, f"{path}[{i}]")
 
 
 def booking_signing_material(ns: str, descriptor: dict) -> bytes:
@@ -194,7 +226,11 @@ def book_send(tenant: Tenant, ledger: Ledger, xchg: str, peer: str,
     to verify. Without a key the booking is exactly as in v0.2/v0.3.
     Recommended: use your key's public hex as your tenant identity
     (`Key.identity`), so the ledger's `ns` itself names the key.
+
+    Raises ValueError — before anything is written — if `payload`
+    contains a non-finite float anywhere (SPEC numeric policy).
     """
+    _reject_non_finite(payload)
     return _book(tenant, ledger, xchg, peer, payload, "send",
                  secret_key=secret_key)
 
@@ -210,7 +246,11 @@ def book_receive(tenant: Tenant, ledger: Ledger, xchg: str, peer: str,
     PAYLOAD_MISMATCH — which is the point.
 
     `secret_key`: same opt-in signed-booking behaviour as `book_send`.
+
+    Raises ValueError — before anything is written — if `payload`
+    contains a non-finite float anywhere (SPEC numeric policy).
     """
+    _reject_non_finite(payload)
     return _book(tenant, ledger, xchg, peer, payload, "receive",
                  secret_key=secret_key)
 
